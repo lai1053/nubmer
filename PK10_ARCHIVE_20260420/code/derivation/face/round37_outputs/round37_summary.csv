@@ -1,0 +1,2 @@
+date_from,date_to,excluded_window,initial_bankroll,stake_per_bet,martingale_cap,days_total,days_active,bets_total,turnover_total,final_bankroll,total_profit,bootstrap_ci_low_daily_pnl,bootstrap_ci_high_daily_pnl,max_drawdown,min_bankroll,max_mult_hit,count_1x,count_2x,count_4x,count_5x,busted
+2025-01-01,2026-01-01,06:00-07:00,1000.0,10.0,5x,365,89,8300.0,162400.0,5167.410000000002,4167.410000000002,-2.8092116438356034,25.948990924657547,-1420.307499999999,729.3775000000002,5,49,21,10,9,False

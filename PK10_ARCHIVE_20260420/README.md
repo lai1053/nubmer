@@ -8,6 +8,8 @@
   - 推理过程、冻结窗口依据、工程源码单文件总档
 - `code/`
   - 当前使用中的关键工程代码
+  - 三条线冻结窗口推理源码
+  - 服务器部署快照
 - `db_exports/`
   - 相关表结构与最近一周数据导出
 
@@ -19,6 +21,10 @@
   - `code/pk10_live_dashboard/`
 - round36 回放与整合脚本：
   - `code/pk10_round36_three_play_2025_replay/`
+- 冻结窗口推理源码：
+  - `code/derivation/`
+- 服务器部署快照：
+  - `code/server_deployed_tengxun/`
 - 数据库导出：
   - `db_exports/schema_relevant_tables.sql`
   - `db_exports/recent_week_data_2026-04-14_to_2026-04-20.sql`
