@@ -17,6 +17,11 @@ from .settings import settings
 
 app = FastAPI(title=settings.app_name)
 
+HISTORY_ISSUE_TABLES = {
+    "jssc": settings.db_table,
+    "jsft": "jsft_pks_history",
+}
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -45,6 +50,30 @@ def _parse_json_field(value: Any) -> Any:
         except json.JSONDecodeError:
             return value
     return value
+
+
+def _history_issue_table(code: str) -> str:
+    table_name = HISTORY_ISSUE_TABLES.get(str(code or "").strip().lower())
+    if not table_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="code 只支持 jssc 或 jsft",
+        )
+    return table_name
+
+
+def _table_exists(table_name: str) -> bool:
+    result = db.query_df(
+        """
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = %s
+          AND table_name = %s
+        LIMIT 1
+        """,
+        (settings.db_name, table_name),
+    )
+    return not result.empty
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -343,6 +372,62 @@ async def api_history_bets(
         "has_next": page < total_pages,
         "scope": scope,
         "counts": counts,
+    }
+
+
+@app.get("/api/history/issues")
+async def api_history_issues(
+    date: str,
+    code: str,
+    _: dict[str, Any] = Depends(get_current_user),
+) -> dict:
+    date = str(date or "").strip()
+    code = str(code or "").strip().lower()
+    if not date or not code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="date 和 code 不能为空",
+        )
+
+    table_name = _history_issue_table(code)
+    if not _table_exists(table_name):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"数据表 {table_name} 不存在",
+        )
+
+    sql = f"""
+    SELECT
+        id,
+        DATE_FORMAT(draw_date, '%%Y-%%m-%%d') AS draw_date,
+        pre_draw_issue,
+        DATE_FORMAT(pre_draw_time, '%%Y-%%m-%%d %%H:%%i:%%s') AS pre_draw_time,
+        pre_draw_code,
+        sum_fs,
+        sum_big_small,
+        sum_single_double,
+        first_dt,
+        second_dt,
+        third_dt,
+        fourth_dt,
+        fifth_dt,
+        group_code,
+        raw_json,
+        DATE_FORMAT(created_at, '%%Y-%%m-%%d %%H:%%i:%%s') AS created_at
+    FROM {table_name}
+    WHERE draw_date = %s
+    ORDER BY pre_draw_time, pre_draw_issue
+    """
+    rows = db.query_df(sql, params=(date,)).to_dict(orient="records")
+    for row in rows:
+        row["raw_json"] = _parse_json_field(row.get("raw_json"))
+
+    return {
+        "date": date,
+        "code": code,
+        "table": table_name,
+        "rows": rows,
+        "count": len(rows),
     }
 
 

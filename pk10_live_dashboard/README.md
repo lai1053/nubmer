@@ -217,6 +217,62 @@ Example:
 curl -b cookie.txt 'http://<host>:5173/api/history/broadcasts?issue=33992130'
 ```
 
+### `GET /api/history/issues`
+
+Requires login. Returns all raw draw records for one date from the issue history table selected by `code`.
+
+Supported `code` values:
+
+- `jssc`: reads from `pks_history`
+- `jsft`: reads from `jsft_pks_history`
+
+Query parameters:
+
+- `date`: required, format `YYYY-MM-DD`.
+- `code`: required, one of `jssc` or `jsft`.
+
+Example requests:
+
+```bash
+curl -b cookie.txt 'http://<host>:5173/api/history/issues?date=2026-04-26&code=jssc'
+curl -b cookie.txt 'http://<host>:5173/api/history/issues?date=2026-04-26&code=jsft'
+```
+
+Example response:
+
+```json
+{
+  "date": "2026-04-26",
+  "code": "jssc",
+  "table": "pks_history",
+  "rows": [
+    {
+      "id": 1498345,
+      "draw_date": "2026-04-26",
+      "pre_draw_issue": 33992130,
+      "pre_draw_time": "2026-04-26 23:41:48",
+      "pre_draw_code": "04,10,09,06,03,07,08,02,01,05",
+      "sum_fs": 14,
+      "sum_big_small": 0,
+      "sum_single_double": 1,
+      "first_dt": 1,
+      "second_dt": 0,
+      "third_dt": 0,
+      "fourth_dt": 1,
+      "fifth_dt": 1,
+      "group_code": 1,
+      "raw_json": {
+        "preDrawIssue": 33992130
+      },
+      "created_at": "2026-04-26 23:42:23"
+    }
+  ],
+  "count": 1
+}
+```
+
+If the selected table does not exist, the endpoint returns `404`.
+
 ### `GET /api/history/by-code`
 
 Requires login. Looks up one draw by date and draw code, then returns related records from the two strategy tables:
