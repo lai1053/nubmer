@@ -1,0 +1,22 @@
+# Runtime state and secrets
+backend/auth_users.json
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+backend/.env
+.env
+
+# Python
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Logs and local OS files
+*.log
+.DS_Store
