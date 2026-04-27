@@ -38,6 +38,15 @@ class UserUpdateRequest(BaseModel):
     password: str | None = None
 
 
+def _parse_json_field(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         key=settings.auth_cookie_name,
@@ -334,6 +343,123 @@ async def api_history_bets(
         "has_next": page < total_pages,
         "scope": scope,
         "counts": counts,
+    }
+
+
+@app.get("/api/history/by-code")
+async def api_history_by_code(
+    date: str,
+    code: str,
+    _: dict[str, Any] = Depends(get_current_user),
+) -> dict:
+    date = str(date or "").strip()
+    code = str(code or "").strip()
+    if not date or not code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="date 和 code 不能为空",
+        )
+
+    issue_sql = f"""
+    SELECT
+        DATE_FORMAT(draw_date, '%%Y-%%m-%%d') AS draw_date,
+        pre_draw_issue,
+        DATE_FORMAT(pre_draw_time, '%%Y-%%m-%%d %%H:%%i:%%s') AS pre_draw_time,
+        pre_draw_code,
+        sum_fs,
+        sum_big_small,
+        sum_single_double,
+        first_dt,
+        second_dt,
+        third_dt,
+        fourth_dt,
+        fifth_dt,
+        group_code
+    FROM {settings.db_table}
+    WHERE draw_date = %s
+      AND pre_draw_code = %s
+    ORDER BY pre_draw_time, pre_draw_issue
+    """
+    issues = db.query_df(issue_sql, params=(date, code)).to_dict(orient="records")
+    issue_ids = [int(row["pre_draw_issue"]) for row in issues if row.get("pre_draw_issue") is not None]
+    if not issue_ids:
+        return {
+            "date": date,
+            "code": code,
+            "issues": [],
+            "bets": [],
+            "broadcasts": [],
+            "counts": {"issues": 0, "bets": 0, "broadcasts": 0},
+        }
+
+    issue_placeholders = ", ".join(["%s"] * len(issue_ids))
+    bet_sql = f"""
+    SELECT
+        id,
+        DATE_FORMAT(draw_date, '%%Y-%%m-%%d') AS draw_date,
+        pre_draw_issue,
+        slot_1based,
+        line_name,
+        status,
+        selection_json,
+        odds_display,
+        stake,
+        multiplier_value,
+        ticket_count,
+        total_cost,
+        hit_count,
+        outcome_label,
+        pnl,
+        meta_json,
+        DATE_FORMAT(created_at, '%%Y-%%m-%%d %%H:%%i:%%s') AS created_at
+    FROM pk10_bet_log
+    WHERE draw_date = %s
+      AND pre_draw_issue IN ({issue_placeholders})
+    ORDER BY pre_draw_issue DESC, id DESC
+    """
+    bet_params: list[object] = [date, *issue_ids]
+    bets = db.query_df(bet_sql, params=tuple(bet_params)).to_dict(orient="records")
+    for row in bets:
+        row["selection_json"] = _parse_json_field(row.get("selection_json"))
+        row["meta_json"] = _parse_json_field(row.get("meta_json"))
+
+    broadcast_sql = f"""
+    SELECT
+        id,
+        DATE_FORMAT(server_time, '%%Y-%%m-%%d %%H:%%i:%%s') AS server_time,
+        DATE_FORMAT(draw_date, '%%Y-%%m-%%d') AS draw_date,
+        pre_draw_issue,
+        draw_issue,
+        latest_slot,
+        slot_1based,
+        line_name,
+        actionable,
+        payload_json,
+        DATE_FORMAT(created_at, '%%Y-%%m-%%d %%H:%%i:%%s') AS created_at
+    FROM pk10_broadcast_log
+    WHERE draw_date = %s
+      AND (
+        pre_draw_issue IN ({issue_placeholders})
+        OR draw_issue IN ({issue_placeholders})
+      )
+    ORDER BY id DESC
+    """
+    broadcast_params: list[object] = [date, *issue_ids, *issue_ids]
+    broadcasts = db.query_df(broadcast_sql, params=tuple(broadcast_params)).to_dict(orient="records")
+    for row in broadcasts:
+        row["payload_json"] = _parse_json_field(row.get("payload_json"))
+
+    return {
+        "date": date,
+        "code": code,
+        "issues": issues,
+        "bets": bets,
+        "broadcasts": broadcasts,
+        "counts": {
+            "issues": len(issues),
+            "bets": len(bets),
+            "broadcasts": len(broadcasts),
+        },
     }
 
 
