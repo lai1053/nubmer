@@ -1109,6 +1109,206 @@ def replay_shared_bankroll(
     )
 
 
+def _executed_log_line_pnl(sim_start: pd.Timestamp, sim_end: pd.Timestamp) -> dict[str, dict[str, dict[str, float]]]:
+    if sim_end < sim_start:
+        return {}
+    df = query_df(
+        """
+        SELECT
+            DATE_FORMAT(draw_date, '%%Y-%%m-%%d') AS draw_date,
+            line_name,
+            COUNT(*) AS executed_slots,
+            SUM(COALESCE(pnl, 0)) AS book_pnl
+        FROM pk10_bet_log
+        WHERE draw_date >= %s
+          AND draw_date <= %s
+          AND status = %s
+          AND pnl IS NOT NULL
+        GROUP BY draw_date, line_name
+        """,
+        (
+            sim_start.strftime("%Y-%m-%d"),
+            sim_end.strftime("%Y-%m-%d"),
+            "executed",
+        ),
+    )
+    if df.empty:
+        return {}
+    out: dict[str, dict[str, dict[str, float]]] = {}
+    for row in df.itertuples(index=False):
+        date_key = str(row.draw_date)
+        line_name = str(row.line_name)
+        book_pnl = float(row.book_pnl or 0.0)
+        out.setdefault(date_key, {})[line_name] = {
+            "book_pnl": book_pnl,
+            "real_pnl": settle_real(book_pnl),
+            "executed_slots": float(row.executed_slots or 0),
+        }
+    return out
+
+
+def _latest_equity_anchor_before(settled_end: pd.Timestamp) -> tuple[pd.Timestamp, float] | None:
+    df = query_df(
+        """
+        SELECT
+            DATE_FORMAT(draw_date, '%%Y-%%m-%%d') AS draw_date,
+            settled_bankroll
+        FROM pk10_daily_equity
+        WHERE draw_date < %s
+          AND draw_date >= %s
+        ORDER BY draw_date DESC
+        LIMIT 1
+        """,
+        (settled_end.strftime("%Y-%m-%d"), settings.simulation_start_date),
+    )
+    if df.empty:
+        return None
+    row = df.iloc[0]
+    return pd.Timestamp(row["draw_date"]), float(row["settled_bankroll"])
+
+
+def _persisted_equity_rows(sim_start: pd.Timestamp, sim_end: pd.Timestamp) -> dict[str, dict[str, float]]:
+    df = query_df(
+        """
+        SELECT
+            DATE_FORMAT(draw_date, '%%Y-%%m-%%d') AS draw_date,
+            settled_bankroll,
+            total_real_pnl,
+            face_real_pnl,
+            sum_real_pnl,
+            exact_real_pnl,
+            drawdown_from_peak
+        FROM pk10_daily_equity
+        WHERE draw_date >= %s
+          AND draw_date <= %s
+        ORDER BY draw_date
+        """,
+        (sim_start.strftime("%Y-%m-%d"), sim_end.strftime("%Y-%m-%d")),
+    )
+    if df.empty:
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for row in df.itertuples(index=False):
+        out[str(row.draw_date)] = {
+            "settled_bankroll": float(row.settled_bankroll),
+            "total_real_pnl": float(row.total_real_pnl),
+            "face_real_pnl": float(row.face_real_pnl),
+            "sum_real_pnl": float(row.sum_real_pnl),
+            "exact_real_pnl": float(row.exact_real_pnl),
+            "drawdown_from_peak": float(row.drawdown_from_peak),
+        }
+    return out
+
+
+def apply_logged_executed_settlements(
+    replay: ReplayResult,
+    sim_start: pd.Timestamp,
+    settled_end: pd.Timestamp,
+) -> ReplayResult:
+    if replay.daily_df.empty or settled_end < sim_start:
+        return replay
+    logged = _executed_log_line_pnl(sim_start, settled_end)
+    if not logged:
+        return replay
+
+    anchor = _latest_equity_anchor_before(settled_end)
+    if anchor is None:
+        anchor_date = sim_start - pd.Timedelta(days=1)
+        anchor_bankroll = float(settings.bankroll_start)
+    else:
+        anchor_date, anchor_bankroll = anchor
+    anchor_key = anchor_date.strftime("%Y-%m-%d")
+    settled_end_key = settled_end.strftime("%Y-%m-%d")
+    target_dates = [date_key for date_key in logged if anchor_key < date_key <= settled_end_key]
+    if not target_dates:
+        return replay
+
+    daily_df = replay.daily_df.copy()
+    daily_df["_date_key"] = pd.to_datetime(daily_df["date"]).dt.strftime("%Y-%m-%d")
+    persisted = _persisted_equity_rows(sim_start, settled_end)
+
+    peak = float(settings.bankroll_start)
+    min_bankroll = float(settings.bankroll_start)
+    max_drawdown = 0.0
+    previous_bankroll: float | None = None
+    for idx in daily_df.index:
+        date_key = str(daily_df.at[idx, "_date_key"])
+        if date_key > anchor_key:
+            break
+        persisted_row = persisted.get(date_key)
+        if persisted_row is not None:
+            if previous_bankroll is not None:
+                daily_df.at[idx, "bankroll_before_day"] = previous_bankroll
+            daily_df.at[idx, "face_real_pnl"] = persisted_row["face_real_pnl"]
+            daily_df.at[idx, "sum_real_pnl"] = persisted_row["sum_real_pnl"]
+            daily_df.at[idx, "exact_real_pnl"] = persisted_row["exact_real_pnl"]
+            daily_df.at[idx, "total_real_pnl"] = persisted_row["total_real_pnl"]
+            daily_df.at[idx, "bankroll_after_day"] = persisted_row["settled_bankroll"]
+        bankroll_after = float(daily_df.at[idx, "bankroll_after_day"])
+        peak = max(peak, bankroll_after)
+        min_bankroll = min(min_bankroll, bankroll_after)
+        drawdown = bankroll_after - peak
+        max_drawdown = min(max_drawdown, drawdown)
+        daily_df.at[idx, "running_peak_bankroll"] = peak
+        daily_df.at[idx, "drawdown_from_peak"] = drawdown
+        previous_bankroll = bankroll_after
+
+    bankroll = anchor_bankroll
+    peak = max(peak, bankroll)
+    min_bankroll = min(min_bankroll, bankroll)
+    for idx in daily_df[daily_df["_date_key"] > anchor_key].index:
+        date_key = str(daily_df.at[idx, "_date_key"])
+        line_logs = logged.get(date_key)
+        if line_logs:
+            face_real = float(line_logs.get("face", {}).get("real_pnl", 0.0))
+            sum_real = float(line_logs.get("sum", {}).get("real_pnl", 0.0))
+            exact_real = float(line_logs.get("exact", {}).get("real_pnl", 0.0))
+        else:
+            face_real = float(daily_df.at[idx, "face_real_pnl"])
+            sum_real = float(daily_df.at[idx, "sum_real_pnl"])
+            exact_real = float(daily_df.at[idx, "exact_real_pnl"])
+
+        total_real = face_real + sum_real + exact_real
+        daily_df.at[idx, "bankroll_before_day"] = bankroll
+        daily_df.at[idx, "face_real_pnl"] = face_real
+        daily_df.at[idx, "sum_real_pnl"] = sum_real
+        daily_df.at[idx, "exact_real_pnl"] = exact_real
+        daily_df.at[idx, "total_real_pnl"] = total_real
+        bankroll += total_real
+        peak = max(peak, bankroll)
+        min_bankroll = min(min_bankroll, bankroll)
+        drawdown = bankroll - peak
+        max_drawdown = min(max_drawdown, drawdown)
+        daily_df.at[idx, "bankroll_after_day"] = bankroll
+        daily_df.at[idx, "running_peak_bankroll"] = peak
+        daily_df.at[idx, "drawdown_from_peak"] = drawdown
+
+    daily_df = daily_df.drop(columns=["_date_key"])
+    summary = {
+        "sim_start": str(sim_start.date()),
+        "sim_end": str(settled_end.date()),
+        "final_bankroll": float(daily_df["bankroll_after_day"].iloc[-1]),
+        "net_profit": float(daily_df["total_real_pnl"].sum()),
+        "peak_bankroll": float(peak),
+        "min_bankroll": float(min_bankroll),
+        "max_drawdown": float(max_drawdown),
+        "face_profit": float(daily_df["face_real_pnl"].sum()),
+        "sum_profit": float(daily_df["sum_real_pnl"].sum()),
+        "exact_profit": float(daily_df["exact_real_pnl"].sum()),
+    }
+    return ReplayResult(
+        daily_df=daily_df,
+        summary=summary,
+        end_bankroll=float(daily_df["bankroll_after_day"].iloc[-1]),
+        end_face_multiplier=replay.end_face_multiplier,
+        end_sum_multiplier=replay.end_sum_multiplier,
+        peak_bankroll=float(peak),
+        min_bankroll=float(min_bankroll),
+        max_drawdown=float(max_drawdown),
+        sum_bet_rows=replay.sum_bet_rows,
+    )
+
+
 def current_day_issue_maps(
     issue_df: pd.DataFrame,
     current_date: pd.Timestamp,
@@ -1810,6 +2010,7 @@ def build_runtime_context(mods: StrategyModules, issue_df: pd.DataFrame, profile
             sum_ctx=sum_ctx,
             exact_ctx=exact_ctx,
         )
+        replay = apply_logged_executed_settlements(replay, simulation_start, settled_end)
     return {
         "profile": profile,
         "current_date": current_date,
