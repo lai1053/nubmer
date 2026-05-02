@@ -2010,7 +2010,8 @@ def build_runtime_context(mods: StrategyModules, issue_df: pd.DataFrame, profile
             sum_ctx=sum_ctx,
             exact_ctx=exact_ctx,
         )
-        replay = apply_logged_executed_settlements(replay, simulation_start, settled_end)
+        if not profile.is_shadow:
+            replay = apply_logged_executed_settlements(replay, simulation_start, settled_end)
     return {
         "profile": profile,
         "current_date": current_date,
