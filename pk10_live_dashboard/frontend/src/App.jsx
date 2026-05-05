@@ -1024,8 +1024,8 @@ function LinePanel({ label, state, fixedStake = false }) {
         </div>
         <div className="line-grid">
           <MobileHistoryPair label="档位" value={fixedStake ? '固定 10' : `${state?.multiplier_value ?? 0}x`} />
-          <MobileHistoryPair label="请求/成交" value={`${requested}/${funded}`} />
-          <MobileHistoryPair label="执行/待执行" value={`${executed}/${pending}`} />
+          <MobileHistoryPair label="计划/可投" value={`${requested}/${funded}`} />
+          <MobileHistoryPair label="已执行/待执行" value={`${executed}/${pending}`} />
         </div>
       </div>
     </section>
