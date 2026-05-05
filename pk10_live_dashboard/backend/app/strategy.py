@@ -1668,6 +1668,7 @@ def finalize_live_state(
         face_book_units += ledger
         face_executed.append(enriched)
     face_real = daily85(face_book_units * replay.end_face_multiplier) * float(settings.base_stake) if face_funded else 0.0
+    face_book = float(sum(item.get("book_pnl", 0.0) for item in face_executed))
 
     sum_executed, sum_pending = [], []
     sum_book_units_total = 0.0
@@ -1690,6 +1691,7 @@ def finalize_live_state(
         sum_book_units_total += book_units
         sum_executed.append(enriched)
     sum_real = settle_real(sum_book_units_total * replay.end_sum_multiplier) * float(settings.base_stake) if sum_funded else 0.0
+    sum_book = float(sum(item.get("book_pnl", 0.0) for item in sum_executed))
 
     exact_executed, exact_pending = [], []
     exact_book_units = 0.0
@@ -1717,8 +1719,9 @@ def finalize_live_state(
         exact_book_units += book_units
         exact_executed.append(enriched)
     exact_real = settle_real(exact_book_units) * float(settings.base_stake) if exact_funded else 0.0
+    exact_book = float(sum(item.get("book_pnl", 0.0) for item in exact_executed))
 
-    total_provisional = float(face_real + sum_real + exact_real)
+    total_provisional = float(face_book + sum_book + exact_book)
     current_actions: list[dict[str, Any]] = []
     next_issue = int(live_payload["drawIssue"]) if live_payload.get("drawIssue") else None
     next_raw_slot = raw_latest_slot + 1
@@ -1769,7 +1772,8 @@ def finalize_live_state(
             "funded_slots": len(face_funded),
             "executed_slots": len(face_executed),
             "pending_slots": len(face_pending),
-            "provisional_pnl": face_real,
+            "provisional_pnl": face_book,
+            "settlement_pnl": face_real,
             "status": face_plan["status"],
             "message": face_plan["message"],
             "executed": face_executed,
@@ -1781,7 +1785,8 @@ def finalize_live_state(
             "funded_slots": len(sum_funded),
             "executed_slots": len(sum_executed),
             "pending_slots": len(sum_pending),
-            "provisional_pnl": sum_real,
+            "provisional_pnl": sum_book,
+            "settlement_pnl": sum_real,
             "status": sum_plan["status"],
             "message": sum_plan["message"],
             "executed": sum_executed,
@@ -1793,7 +1798,8 @@ def finalize_live_state(
             "funded_slots": len(exact_funded),
             "executed_slots": len(exact_executed),
             "pending_slots": len(exact_pending),
-            "provisional_pnl": exact_real,
+            "provisional_pnl": exact_book,
+            "settlement_pnl": exact_real,
             "status": exact_plan["status"],
             "message": exact_plan["message"],
             "executed": exact_executed,
