@@ -542,14 +542,16 @@ def issue_counts(limit: int = 120) -> list[dict[str, Any]]:
     )
 
 
-def get_data_quality_summary() -> dict[str, Any]:
+def get_data_quality_summary(
+    pre_fetched_counts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if not table_exists():
         return {
             "status": "missing_table",
             "message": f"DB table {DB_NAME}.{DB_TABLE} does not exist.",
             "days": [],
         }
-    rows = issue_counts(120)
+    rows = pre_fetched_counts if pre_fetched_counts is not None else issue_counts(120)
     if not rows:
         return {
             "status": "empty_table",
@@ -987,7 +989,7 @@ def latest_summary() -> dict[str, Any]:
         target, latest_seen, expected_count, gate_state
     )
     shadow_stat = shadow_status()
-    dq = get_data_quality_summary()
+    dq = get_data_quality_summary(pre_fetched_counts=list(counts_desc))
 
     return {
         "table_exists": True,
