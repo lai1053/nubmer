@@ -1480,6 +1480,52 @@ async def api_jsft_bet_log(page: int = 1, page_size: int = 60) -> dict[str, Any]
         return {"rows": [], "page": 1, "page_size": page_size, "total": 0, "total_pages": 1}
 
 
+@app.get("/api/jssc-live-state")
+async def api_jssc_live_state() -> dict[str, Any]:
+    try:
+        rows = query(
+            "SELECT state_json FROM pk10_runtime_state WHERE state_key = 'dashboard' LIMIT 1"
+        )
+        if rows and rows[0].get("state_json"):
+            raw = rows[0]["state_json"]
+            if isinstance(raw, str):
+                return json.loads(raw)
+            return raw
+    except Exception:
+        pass
+    return {}
+
+
+@app.get("/api/jssc-broadcasts")
+async def api_jssc_broadcasts(limit: int = 40) -> dict[str, Any]:
+    try:
+        rows = query(
+            """
+            SELECT
+                DATE_FORMAT(draw_date, '%%Y-%%m-%%d') AS draw_date,
+                pre_draw_issue,
+                draw_issue,
+                line_name,
+                actionable,
+                payload_json,
+                DATE_FORMAT(server_time, '%%Y-%%m-%%d %%H:%%i:%%s') AS server_time
+            FROM pk10_broadcast_log
+            ORDER BY id DESC
+            LIMIT %s
+            """,
+            (int(limit),),
+        )
+        for row in rows:
+            if isinstance(row.get("payload_json"), str):
+                try:
+                    row["payload_json"] = json.loads(row["payload_json"])
+                except Exception:
+                    pass
+        return {"rows": rows}
+    except Exception:
+        return {"rows": []}
+
+
 @app.get("/api/jssc-daily-curve")
 async def api_jssc_daily_curve() -> dict[str, Any]:
     try:
@@ -1611,10 +1657,16 @@ HTML = r"""<!doctype html>
       </section>
       <section>
         <h2>JSSC 实盘 <span style="font-weight:400;font-size:13px;color:var(--muted)">face+sum+exact · 日级结算</span></h2>
+        <div id="jsscLines" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px"></div>
         <div class="cards" id="jsscCards"></div>
         <div class="table-wrap" id="jsscTable" style="margin-top:14px"></div>
       </section>
     </div>
+
+    <section style="margin-top:18px" class="full-width">
+      <h2>JSSC 播报历史</h2>
+      <div class="table-wrap" id="broadcasts" style="max-height:360px"></div>
+    </section>
 
     <section style="margin-top:18px" class="full-width">
       <h2>资金曲线对比</h2>
@@ -1641,7 +1693,7 @@ HTML = r"""<!doctype html>
     const cls = v => Number(v ?? 0) >= 0 ? 'pos' : 'neg'
     const card = (label, value, tone) => `<div class="metric ${tone||''}"><span>${label}</span><strong>${value ?? '—'}</strong></div>`
 
-    function renderCombined(jsft, jssc) {
+    function renderCombined(jsft, jssc, jsscLive, bcast) {
       const jsftOk = jsft && jsft.status === 'ok'
       const jsscOk = jssc && jssc.rows && jssc.rows.length > 0
 
@@ -1737,6 +1789,59 @@ HTML = r"""<!doctype html>
         jsscTableEl.innerHTML = ''
       }
 
+      // JSSC line panels (face/sum/exact)
+      const jsscLines = document.getElementById('jsscLines')
+      if (jsscLive && jsscLive.today_plan) {
+        const plan = jsscLive.today_plan
+        const lineCard = (name, label, state) => {
+          if (!state) return ''
+          const pnl = Number(state.provisional_pnl || 0)
+          const req = state.requested_slots || 0
+          const fund = state.funded_slots || 0
+          const exec = state.executed_slots || 0
+          const pend = state.pending_slots || 0
+          const mult = name === 'exact' ? '固定10' : (state.multiplier_value || 0) + 'x'
+          return `<div class="metric"><span>${label}</span>
+            <strong style="font-size:14px;color:${pnl>=0?'var(--success)':'var(--danger)'}">${state.message||state.status||''}</strong>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">
+              浮动盈亏 ${signed(pnl)} · 档位 ${mult}<br/>
+              计划/可投 ${req}/${fund} · 已执行/待 ${exec}/${pend}
+            </div></div>`
+        }
+        jsscLines.innerHTML = [
+          lineCard('face', '双面', plan.face),
+          lineCard('sum', '冠亚和', plan.sum),
+          lineCard('exact', '定位胆', plan.exact),
+        ].filter(Boolean).join('')
+      } else {
+        jsscLines.innerHTML = ''
+      }
+
+      // Broadcast history
+      const bcastEl = document.getElementById('broadcasts')
+      if (bcast && bcast.rows && bcast.rows.length > 0) {
+        bcastEl.innerHTML = `
+          <table>
+            <thead><tr><th>时间</th><th>日期</th><th>玩法</th><th>触发期</th><th>目标期</th><th>内容</th></tr></thead>
+            <tbody>${bcast.rows.map(r => {
+              const p = r.payload_json || {}
+              const sel = p.selection || {}
+              let detail = ''
+              if (r.line_name === 'sum' && sel.sum_value != null) detail = '和值 ' + sel.sum_value
+              else if (r.line_name === 'face') detail = sel.source || '双面'
+              else if (r.line_name === 'exact') detail = '位' + (sel.position_1based||'') + '·号' + (sel.number||'')
+              return `<tr>
+                <td>${r.server_time||''}</td><td>${r.draw_date||''}</td>
+                <td>${r.line_name==='face'?'双面':r.line_name==='sum'?'冠亚和':r.line_name==='exact'?'定位胆':r.line_name}</td>
+                <td class="num">${r.pre_draw_issue||''}</td><td class="num">${r.draw_issue||''}</td>
+                <td>${detail}${r.actionable?' · 可投':''}</td>
+              </tr>`
+            }).join('')}</tbody>
+          </table>`
+      } else {
+        bcastEl.innerHTML = '<div class="metric" style="grid-column:1/-1"><span>播报</span><strong>暂无数据</strong></div>'
+      }
+
       // Combined curve
       if (jsftOk || jsscOk) {
         const jsftDaily = jsftOk ? ((jsft.account || {}).daily || []) : []
@@ -1784,11 +1889,13 @@ HTML = r"""<!doctype html>
 
     async function loadAll() {
       try {
-        const [jsftRes, jsscRes] = await Promise.all([
+        const [jsftRes, jsscRes, jsscLiveRes, bcastRes] = await Promise.all([
           fetch('/api/state', { cache: 'no-store' }).then(r => r.json()),
-          fetch('/api/jssc-daily-curve', { cache: 'no-store' }).then(r => r.json())
+          fetch('/api/jssc-daily-curve', { cache: 'no-store' }).then(r => r.json()),
+          fetch('/api/jssc-live-state', { cache: 'no-store' }).then(r => r.json()),
+          fetch('/api/jssc-broadcasts?limit=40', { cache: 'no-store' }).then(r => r.json()),
         ])
-        renderCombined(jsftRes, jsscRes)
+        renderCombined(jsftRes, jsscRes, jsscLiveRes, bcastRes)
         loadBetLog()
       } catch (e) {
         statusEl.className = 'badge bad'
