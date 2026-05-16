@@ -639,11 +639,14 @@ def leakage_check() -> dict[str, Any]:
             "rows": [],
         }
     expected_count = EXPECTED_ISSUES_PER_DAY
-    result = account_replay(expected_count)
-    daily = result.get("daily", [])
-    if not daily:
+    selected, _ = replay_selected_rows(expected_count)
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in selected:
+        by_day.setdefault(str(row["draw_date"]), []).append(row)
+
+    if not by_day:
         return {
-            "status": "empty_replay",
+            "status": "empty_data",
             "checked_days": 0,
             "failed_days": 0,
             "failed_rate": 0.0,
@@ -651,76 +654,80 @@ def leakage_check() -> dict[str, Any]:
             "rows": [],
         }
 
-    selected, _ = replay_selected_rows(expected_count)
-    by_day: dict[str, list[dict[str, Any]]] = {}
-    for row in selected:
-        by_day.setdefault(str(row["draw_date"]), []).append(row)
+    result = account_replay(expected_count)
+    daily_map: dict[str, dict[str, Any]] = {
+        str(row["date"]): row for row in result.get("daily", [])
+    }
 
     base_days: list[dict[str, Any]] = []
-    rows: list[dict[str, Any]] = []
+    out_rows: list[dict[str, Any]] = []
     checked = 0
     failed = 0
 
-    sorted_dates = [str(r["date"]) for r in daily]
-    for idx, day_row in enumerate(daily):
-        date_str = str(day_row["date"])
-        checked += 1
-
-        today_rows = by_day.get(date_str, [])
-        today_observed_count = len(today_rows)
-
-        original_decision = {
-            "active": bool(day_row.get("window_active", False)),
-            "gate_reason": str(day_row.get("gate_reason", "")),
-            "recommended_mode": (
-                "core" if bool(day_row.get("window_active", False)) else "cash"
-            ),
-            "would_execute_bets_count": int(day_row.get("requested_bets", 0)),
-        }
+    for date_str in sorted(by_day.keys()):
+        today_rows = by_day[date_str]
 
         masked_decision = build_preday_decision(
             base_days, expected_count, today_observed_count=0
         )
+        prior_days_count = len(base_days)
 
-        prior_for_masked = [
-            str(d["date"]) for d in base_days
-        ]
+        if date_str >= REPLAY_START_DATE:
+            day_row = daily_map.get(date_str)
+            if day_row is not None:
+                checked += 1
+                original_decision = {
+                    "active": bool(day_row.get("window_active", False)),
+                    "gate_reason": str(day_row.get("gate_reason", "")),
+                    "recommended_mode": (
+                        "core" if bool(day_row.get("window_active", False)) else "cash"
+                    ),
+                    "would_execute_bets_count": int(
+                        day_row.get("requested_bets", 0)
+                    ),
+                }
+
+                decision_equal = (
+                    original_decision["active"] == masked_decision["active"]
+                    and original_decision["recommended_mode"]
+                    == masked_decision["recommended_mode"]
+                    and original_decision["gate_reason"] == masked_decision["gate_reason"]
+                    and original_decision["would_execute_bets_count"]
+                    == masked_decision["would_execute_bets_count"]
+                )
+
+                failed_reason = ""
+                if not decision_equal:
+                    failed += 1
+                    parts = []
+                    if original_decision["active"] != masked_decision["active"]:
+                        parts.append(
+                            f"active: orig={original_decision['active']} masked={masked_decision['active']}"
+                        )
+                    if original_decision["recommended_mode"] != masked_decision["recommended_mode"]:
+                        parts.append(
+                            f"mode: orig={original_decision['recommended_mode']} masked={masked_decision['recommended_mode']}"
+                        )
+                    if original_decision["gate_reason"] != masked_decision["gate_reason"]:
+                        parts.append("gate_reason differs")
+                    if original_decision["would_execute_bets_count"] != masked_decision["would_execute_bets_count"]:
+                        parts.append(
+                            f"bets: orig={original_decision['would_execute_bets_count']} masked={masked_decision['would_execute_bets_count']}"
+                        )
+                    failed_reason = "; ".join(parts)
+
+                out_rows.append(
+                    {
+                        "date": date_str,
+                        "prior_days": prior_days_count,
+                        "decision_original": original_decision,
+                        "decision_masked": masked_decision,
+                        "decision_equal": decision_equal,
+                        "failed_reason": failed_reason,
+                    }
+                )
+
         base_days.append(summarize_base_day(date_str, today_rows))
-
-        decision_equal = (
-            original_decision["active"] == masked_decision["active"]
-            and original_decision["recommended_mode"]
-            == masked_decision["recommended_mode"]
-            and original_decision["gate_reason"] == masked_decision["gate_reason"]
-        )
-
-        failed_reason = ""
-        if not decision_equal:
-            failed += 1
-            parts = []
-            if original_decision["active"] != masked_decision["active"]:
-                parts.append(
-                    f"active: orig={original_decision['active']} masked={masked_decision['active']}"
-                )
-            if original_decision["recommended_mode"] != masked_decision["recommended_mode"]:
-                parts.append(
-                    f"mode: orig={original_decision['recommended_mode']} masked={masked_decision['recommended_mode']}"
-                )
-            if original_decision["gate_reason"] != masked_decision["gate_reason"]:
-                parts.append(
-                    f"gate_reason differs"
-                )
-            failed_reason = "; ".join(parts)
-
-        rows.append(
-            {
-                "date": date_str,
-                "decision_original": original_decision,
-                "decision_masked": masked_decision,
-                "decision_equal": decision_equal,
-                "failed_reason": failed_reason,
-            }
-        )
 
     return {
         "status": "ok",
@@ -728,32 +735,65 @@ def leakage_check() -> dict[str, Any]:
         "failed_days": failed,
         "failed_rate": round(failed / max(checked, 1), 6),
         "leakage_free": failed == 0,
-        "method": "For each replay day, gate is recomputed from prior base_days only (masked today) and compared with original decision.",
-        "rows": rows,
+        "method": "For each complete day from REPLAY_HISTORY_START, gate is recomputed from prior base_days only (masked today). Only days >= REPLAY_START_DATE are compared.",
+        "rows": out_rows,
     }
+
+
+SHADOW_LOG_HEADER = [
+    "created_at",
+    "date",
+    "recommended_mode",
+    "active_windows",
+    "would_execute_bets_count",
+    "executed_bets",
+    "account_daily_ledger_shadow",
+    "account_daily_real_shadow",
+    "account_daily_bonus_shadow",
+    "data_quality_ok",
+    "gate_reason",
+    "notes",
+]
+
+
+def migrate_shadow_log_schema() -> None:
+    if not SHADOW_LOG_PATH.exists():
+        return
+    with SHADOW_LOG_PATH.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        old_header = reader.fieldnames or []
+        old_rows: list[dict[str, str]] = list(reader)
+    if not old_header:
+        _write_new_shadow_log()
+        return
+    if "executed_bets" in old_header:
+        return
+    new_rows: list[dict[str, str]] = []
+    for row in old_rows:
+        new_row: dict[str, str] = {}
+        for col in SHADOW_LOG_HEADER:
+            if col == "executed_bets":
+                new_row[col] = row.get("would_execute_bets_count", "")
+            else:
+                new_row[col] = row.get(col, "")
+        new_rows.append(new_row)
+    with SHADOW_LOG_PATH.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SHADOW_LOG_HEADER)
+        writer.writeheader()
+        writer.writerows(new_rows)
+
+
+def _write_new_shadow_log() -> None:
+    with SHADOW_LOG_PATH.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(SHADOW_LOG_HEADER)
 
 
 def ensure_shadow_log() -> None:
     if SHADOW_LOG_PATH.exists():
+        migrate_shadow_log_schema()
         return
-    with SHADOW_LOG_PATH.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(
-            [
-                "created_at",
-                "date",
-                "recommended_mode",
-                "active_windows",
-                "would_execute_bets_count",
-                "executed_bets",
-                "account_daily_ledger_shadow",
-                "account_daily_real_shadow",
-                "account_daily_bonus_shadow",
-                "data_quality_ok",
-                "gate_reason",
-                "notes",
-            ]
-        )
+    _write_new_shadow_log()
 
 
 def read_shadow_log(limit: int = 100) -> list[dict[str, Any]]:
