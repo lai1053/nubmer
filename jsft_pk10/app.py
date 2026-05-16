@@ -1626,31 +1626,30 @@ HTML = r"""<!doctype html>
         metric('前26日real', signed(gate.prior26_real || 0), Number(gate.prior26_real || 0) >= 0 ? 'good' : 'bad')
       ].join('')
       const statusLabel = {
-        pending: '待执行', missed: '已关', planned: '计划中',
+        pending: '待开出', missed: '已开出', planned: '计划中',
         stale_missed: '已过期', stale_unavailable: '不可用'
       }
-      const statusTone = (s) => s === 'pending' ? 'pos' : (s === 'planned' ? '' : 'neg')
       const decisionSlots = core.decision_slots || []
-      const pendingSlots = decisionSlots.filter(s => s.status === 'pending' || s.status === 'planned')
-      const missedCount = decisionSlots.filter(s => s.status === 'missed').length
       slotsEl.innerHTML = decisionSlots.length ? `
         <div class="table-wrap" style="max-height:none">
         <table>
           <thead><tr><th class="num">期位 #</th><th class="num">预期期号</th><th>选择</th><th>状态</th></tr></thead>
-          <tbody>${pendingSlots.map(slot => `
+          <tbody>${decisionSlots.map(slot => {
+            const tone = slot.status === 'pending' ? 'pos' : (slot.status === 'missed' ? '' : '')
+            return `
             <tr>
               <td class="num"><b>${slot.slot}</b></td>
               <td class="num">${slot.expected_issue || '—'}</td>
               <td>冠亚和 ${slot.sum_value}</td>
-              <td class="${statusTone(slot.status)}">${statusLabel[slot.status] || slot.status}</td>
-            </tr>`).join('')}</tbody>
-        </table>
-        ${pendingSlots.length === 0 ? '<div class="metric" style="margin-top:10px"><span>今日窗口</span><strong>今日所有 slot 已过</strong><small>等待下个交易日数据入库</small></div>' : ''}
-        </div>
+              <td class="${tone}">${statusLabel[slot.status] || slot.status}</td>
+            </tr>`
+          }).join('')}</tbody>
+        </table></div>
         <div style="margin-top:8px;font-size:13px;color:var(--muted)">
-          今日共 <b>${decisionSlots.length}</b> 个 slot
-          ${missedCount > 0 ? ' · 已关 <b>' + missedCount + '</b> 个（当期号已开出）' : ''}
-          · 待执行 <b style="color:var(--ok)">${pendingSlots.length}</b> 个
+          今日共 <b>${decisionSlots.length}</b> 个 slot，gate 开窗时全部执行推演。
+          <b>${decisionSlots.filter(s => s.status==='missed').length}</b> 个已开出（等今日收盘后 replay 结算）、
+          <b style="color:var(--ok)">${decisionSlots.filter(s => s.status==='pending').length}</b> 个待开出。
+          ${decisionSlots.filter(s => s.status==='planned').length ? ' · <b>' + decisionSlots.filter(s => s.status==='planned').length + '</b> 个计划中（未来日）。' : ''}
         </div>
       ` : `<div class="metric" style="grid-column:1/-1"><span>今日窗口</span><strong>不开窗 / 空仓</strong><small>${gate.reason || ''}</small></div>`
       dailyEl.innerHTML = `
