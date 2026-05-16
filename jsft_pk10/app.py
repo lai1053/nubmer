@@ -1480,6 +1480,67 @@ async def api_jsft_bet_log(page: int = 1, page_size: int = 60) -> dict[str, Any]
         return {"rows": [], "page": 1, "page_size": page_size, "total": 0, "total_pages": 1}
 
 
+@app.get("/api/jssc-bet-log")
+async def api_jssc_bet_log(page: int = 1, page_size: int = 40) -> dict[str, Any]:
+    page = max(1, int(page))
+    page_size = max(10, min(200, int(page_size)))
+    offset = (page - 1) * page_size
+    try:
+        total_row = query("SELECT COUNT(*) AS cnt FROM pk10_bet_log WHERE draw_date >= '2026-04-01'")
+        total = int(total_row[0]["cnt"]) if total_row else 0
+        rows = query(
+            """
+            SELECT
+                b.id,
+                DATE_FORMAT(b.draw_date, '%%Y-%%m-%%d') AS draw_date,
+                b.pre_draw_issue,
+                b.slot_1based,
+                b.line_name,
+                b.status,
+                b.selection_json,
+                b.odds_display,
+                b.stake,
+                b.multiplier_value,
+                b.total_cost,
+                b.hit_count,
+                b.outcome_label,
+                b.pnl,
+                b.meta_json,
+                DATE_FORMAT(h.pre_draw_time, '%%Y-%%m-%%d %%H:%%i:%%s') AS pre_draw_time,
+                h.pre_draw_code
+            FROM pk10_bet_log b
+            LEFT JOIN pks_history h ON h.pre_draw_issue = b.pre_draw_issue
+            WHERE b.draw_date >= '2026-04-01'
+            ORDER BY b.draw_date DESC, b.pre_draw_issue DESC, b.id DESC
+            LIMIT %s OFFSET %s
+            """,
+            (page_size, offset),
+        )
+        for row in rows:
+            if isinstance(row.get("selection_json"), str):
+                try:
+                    row["selection_json"] = json.loads(row["selection_json"])
+                except Exception:
+                    pass
+            if isinstance(row.get("meta_json"), str):
+                try:
+                    row["meta_json"] = json.loads(row["meta_json"])
+                except Exception:
+                    pass
+            meta = row.get("meta_json") or {}
+            row["broadcast_state"] = meta.get("broadcast_state", "")
+            row["broadcast_time"] = meta.get("broadcast_time")
+        return {
+            "rows": rows,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": max(1, (total + page_size - 1) // page_size) if total else 1,
+        }
+    except Exception:
+        return {"rows": [], "page": 1, "page_size": page_size, "total": 0, "total_pages": 1}
+
+
 @app.get("/api/jssc-live-state")
 async def api_jssc_live_state() -> dict[str, Any]:
     try:
@@ -1664,6 +1725,11 @@ HTML = r"""<!doctype html>
     </div>
 
     <section style="margin-top:18px" class="full-width">
+      <h2>JSSC 投注历史</h2>
+      <div class="table-wrap" id="jsscBets" style="max-height:480px"></div>
+    </section>
+
+    <section style="margin-top:18px" class="full-width">
       <h2>JSSC 播报历史</h2>
       <div class="table-wrap" id="broadcasts" style="max-height:360px"></div>
     </section>
@@ -1693,7 +1759,7 @@ HTML = r"""<!doctype html>
     const cls = v => Number(v ?? 0) >= 0 ? 'pos' : 'neg'
     const card = (label, value, tone) => `<div class="metric ${tone||''}"><span>${label}</span><strong>${value ?? '—'}</strong></div>`
 
-    function renderCombined(jsft, jssc, jsscLive, bcast) {
+    function renderCombined(jsft, jssc, jsscLive, bcast, betLog) {
       const jsftOk = jsft && jsft.status === 'ok'
       const jsscOk = jssc && jssc.rows && jssc.rows.length > 0
 
@@ -1842,6 +1908,43 @@ HTML = r"""<!doctype html>
         bcastEl.innerHTML = '<div class="metric" style="grid-column:1/-1"><span>播报</span><strong>暂无数据</strong></div>'
       }
 
+      // Bet history
+      const betEl = document.getElementById('jsscBets')
+      if (betLog && betLog.rows && betLog.rows.length > 0) {
+        const lineLabel = n => n === 'face' ? '双面' : n === 'sum' ? '冠亚和' : n === 'exact' ? '定位胆' : n
+        const statusLabel = s => s === 'settled' ? '已结算' : s === 'executed' ? '已执行' : s === 'pending' ? '待开奖' : s
+        const bcastLabel = s => s === 'broadcasted' ? '已播报' : s === 'pending_future' ? '待执行' : s || '—'
+        betEl.innerHTML = `
+          <table>
+            <thead><tr>
+              <th>日期</th><th class="num">期号</th><th>期位</th><th>玩法</th><th>状态</th><th>播报</th>
+              <th>开奖时间</th><th>号码</th><th>赔率</th><th class="num">金额</th><th class="num">盈亏</th>
+            </tr></thead>
+            <tbody>${betLog.rows.map(r => {
+              const sel = r.selection_json || {}
+              let detail = ''
+              if (r.line_name === 'sum' && sel.sum_value != null) detail = '和值 ' + sel.sum_value
+              else if (r.line_name === 'exact') detail = '位' + (sel.position_1based||'') + '·号' + (sel.number||'')
+              else if (r.line_name === 'face') detail = sel.source || ''
+              return `<tr>
+                <td>${r.draw_date||''}</td>
+                <td class="num">${r.pre_draw_issue||''}</td>
+                <td class="num">#${r.slot_1based||''}</td>
+                <td>${lineLabel(r.line_name)}${detail?' · '+detail:''}</td>
+                <td>${statusLabel(r.status)}</td>
+                <td>${bcastLabel(r.broadcast_state)}</td>
+                <td>${r.pre_draw_time||'—'}</td>
+                <td>${r.pre_draw_code||'—'}</td>
+                <td>${r.odds_display||''}</td>
+                <td class="num">${fmt(r.total_cost)}</td>
+                <td class="num ${cls(r.pnl)}">${r.pnl != null ? signed(r.pnl) : '—'}</td>
+              </tr>`
+            }).join('')}</tbody>
+          </table>`
+      } else {
+        betEl.innerHTML = '<div class="metric" style="grid-column:1/-1"><span>投注</span><strong>暂无数据</strong></div>'
+      }
+
       // Combined curve
       if (jsftOk || jsscOk) {
         const jsftDaily = jsftOk ? ((jsft.account || {}).daily || []) : []
@@ -1889,13 +1992,14 @@ HTML = r"""<!doctype html>
 
     async function loadAll() {
       try {
-        const [jsftRes, jsscRes, jsscLiveRes, bcastRes] = await Promise.all([
+        const [jsftRes, jsscRes, jsscLiveRes, bcastRes, betLogRes] = await Promise.all([
           fetch('/api/state', { cache: 'no-store' }).then(r => r.json()),
           fetch('/api/jssc-daily-curve', { cache: 'no-store' }).then(r => r.json()),
           fetch('/api/jssc-live-state', { cache: 'no-store' }).then(r => r.json()),
           fetch('/api/jssc-broadcasts?limit=40', { cache: 'no-store' }).then(r => r.json()),
+          fetch('/api/jssc-bet-log?page_size=60', { cache: 'no-store' }).then(r => r.json()),
         ])
-        renderCombined(jsftRes, jsscRes, jsscLiveRes, bcastRes)
+        renderCombined(jsftRes, jsscRes, jsscLiveRes, bcastRes, betLogRes)
         loadBetLog()
       } catch (e) {
         statusEl.className = 'badge bad'
