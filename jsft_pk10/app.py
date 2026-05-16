@@ -56,6 +56,7 @@ SETTLEMENT_MODE = _frozen["settlement"]
 
 app = FastAPI(title=APP_NAME)
 _ACCOUNT_CACHE: dict[str, Any] = {"key": None, "expires_at": 0.0, "value": None}
+_ISSUE_COUNTS_CACHE: dict[str, Any] = {"expires_at": 0.0, "value": None}
 
 try:
     _tz = __import__("zoneinfo", fromlist=["ZoneInfo"]).ZoneInfo(TIMEZONE)
@@ -542,6 +543,20 @@ def issue_counts(limit: int = 120) -> list[dict[str, Any]]:
     )
 
 
+def cached_issue_counts(limit: int = 120) -> list[dict[str, Any]]:
+    now = time.monotonic()
+    if (
+        _ISSUE_COUNTS_CACHE["value"] is not None
+        and now < float(_ISSUE_COUNTS_CACHE["expires_at"])
+    ):
+        return _ISSUE_COUNTS_CACHE["value"]
+    value = issue_counts(limit)
+    _ISSUE_COUNTS_CACHE.update(
+        {"value": value, "expires_at": now + ACCOUNT_CACHE_SECONDS}
+    )
+    return value
+
+
 def get_data_quality_summary(
     pre_fetched_counts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -551,7 +566,7 @@ def get_data_quality_summary(
             "message": f"DB table {DB_NAME}.{DB_TABLE} does not exist.",
             "days": [],
         }
-    rows = pre_fetched_counts if pre_fetched_counts is not None else issue_counts(120)
+    rows = pre_fetched_counts if pre_fetched_counts is not None else cached_issue_counts(120)
     if not rows:
         return {
             "status": "empty_table",
@@ -956,7 +971,7 @@ def latest_summary() -> dict[str, Any]:
             "deployment_level": DEPLOYMENT_LEVEL,
             "champion_ready": CHAMPION_READY,
         }
-    counts_desc = issue_counts(120)
+    counts_desc = cached_issue_counts(120)
     if not counts_desc:
         return {
             "table_exists": True,
@@ -1236,7 +1251,7 @@ async def replay() -> dict[str, Any]:
                 "frozen_window_id": FROZEN_WINDOW_ID,
                 "gate_id": GATE_ID,
             }
-        counts_desc = issue_counts(120)
+        counts_desc = cached_issue_counts(120)
         issue_counter = Counter(
             int(row["issue_count"])
             for row in counts_desc
