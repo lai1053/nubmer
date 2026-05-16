@@ -22,7 +22,11 @@ for planning and review.
 - Running source: `/root/jsft_pk10`
 - Repository path: `jsft_pk10/`
 
-## Commit Hygiene
+## Port 5200
+
+- Public URL: `http://8.148.182.237:5200/`
+- nginx config: `/etc/nginx/sites-enabled/jsft-pk10-5200.conf`
+- Same backend as 5174: `127.0.0.1:18084`
 
 - Do not commit real `.env` files, environment backups, virtualenvs, logs, or
   runtime account/user state.

@@ -33,6 +33,7 @@ check_url "5174 data-quality" "http://127.0.0.1:18084/api/data-quality" || failu
 check_url "5174 shadow-status" "http://127.0.0.1:18084/api/shadow/status" || failures=$((failures + 1))
 check_head "5173 public nginx" "http://${PUBLIC_HOST}:5173/" || failures=$((failures + 1))
 check_head "5174 public nginx" "http://${PUBLIC_HOST}:5174/" || failures=$((failures + 1))
+check_head "5200 public nginx" "http://${PUBLIC_HOST}:5200/" || failures=$((failures + 1))
 
 echo "==> PM2"
 if command -v pm2 >/dev/null 2>&1; then
