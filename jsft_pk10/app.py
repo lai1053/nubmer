@@ -1778,11 +1778,11 @@ HTML = r"""<!doctype html>
       const ss = jsftOk ? (jsft.live_shadow_status || {}) : {}
       statusBarEl.innerHTML = [
         `<div class="status-chip"><span>JSFT 窗口</span><b>${gate.active ? '开窗' : '空仓'}</b></div>`,
-        `<div class="status-chip"><span>Gate 前13日</span><b>${signed(gate.prior13_real||0)}</b></div>`,
+        `<div class="status-chip"><span>前13日</span><b>${signed(gate.prior13_real||0)}</b></div>`,
         `<div class="status-chip"><span>最新完整日</span><b>${jsftOk ? (jsft.latest_complete_date||'—') : '—'}</b></div>`,
         `<div class="status-chip"><span>Shadow 累计日</span><b>${ss.live_shadow_days||0}</b></div>`,
         `<div class="status-chip"><span>Shadow 13日盈</span><b>${signed(ss.live13_real||0)}</b></div>`,
-        `<div class="status-chip"><span>部署级别</span><b>${jsftOk ? jsft.deployment_level : '—'}</b></div>`,
+        `<div class="status-chip"><span>部署级别</span><b>${jsftOk ? (jsft.deployment_level === 'core_shadow' ? '核心影子' : jsft.deployment_level) : '—'}</b></div>`,
       ].join('')
 
       // JSFT cards
@@ -1798,7 +1798,7 @@ HTML = r"""<!doctype html>
           card('总下注', totals.total_bets),
           card('命中率', ((totals.hit_rate||0)*100).toFixed(1)+'%'),
           card('异常日数', dq.anomaly_date_count||0, (dq.anomaly_date_count||0) > 0 ? 'warn' : ''),
-          card('bankroll 限制', totals.skipped_bets_due_to_bankroll||0, (totals.skipped_bets_due_to_bankroll||0) > 0 ? 'warn' : ''),
+          card('资金限制', totals.skipped_bets_due_to_bankroll||0, (totals.skipped_bets_due_to_bankroll||0) > 0 ? 'warn' : ''),
         ].join('')
 
         const daily = (jsft.account || {}).daily || []
@@ -1882,8 +1882,9 @@ HTML = r"""<!doctype html>
           const exec = state.executed_slots || 0
           const pend = state.pending_slots || 0
           const mult = name === 'exact' ? '固定10' : (state.multiplier_value || 0) + 'x'
+          const statusText = state.message || (state.status === 'active' ? '开窗' : state.status === 'cash' ? '空仓' : state.status === 'idle' ? '空闲' : (state.status || ''))
           return `<div class="metric"><span>${label}</span>
-            <strong style="font-size:14px;color:${pnl>=0?'var(--success)':'var(--danger)'}">${state.message||state.status||''}</strong>
+            <strong style="font-size:14px;color:${pnl>=0?'var(--success)':'var(--danger)'}">${statusText}</strong>
             <div style="font-size:11px;color:var(--muted);margin-top:4px">
               浮动盈亏 ${signed(pnl)} · 档位 ${mult}<br/>
               计划/可投 ${req}/${fund} · 已执行/待 ${exec}/${pend}
