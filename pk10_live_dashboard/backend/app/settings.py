@@ -141,6 +141,9 @@ class Settings:
     compare_blackout_start: str = _env("PK10_COMPARE_BLACKOUT_START", "")
     compare_blackout_end: str = _env("PK10_COMPARE_BLACKOUT_END", "")
 
+    jsft_shadow_base_url: str = _env("PK10_JSFT_SHADOW_BASE_URL", "http://127.0.0.1:18084")
+    jsft_shadow_token: str = _env("PK10_JSFT_SHADOW_TOKEN", "")
+
     @property
     def primary_profile(self) -> StrategyProfile:
         label = self.primary_label.strip() or (

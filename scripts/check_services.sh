@@ -28,6 +28,9 @@ failures=0
 
 check_url "5173 backend health" "http://127.0.0.1:18080/api/health" || failures=$((failures + 1))
 check_url "5174 backend health" "http://127.0.0.1:18084/api/health" || failures=$((failures + 1))
+check_url "5174 frozen-windows" "http://127.0.0.1:18084/api/frozen-windows" || failures=$((failures + 1))
+check_url "5174 data-quality" "http://127.0.0.1:18084/api/data-quality" || failures=$((failures + 1))
+check_url "5174 shadow-status" "http://127.0.0.1:18084/api/shadow/status" || failures=$((failures + 1))
 check_head "5173 public nginx" "http://${PUBLIC_HOST}:5173/" || failures=$((failures + 1))
 check_head "5174 public nginx" "http://${PUBLIC_HOST}:5174/" || failures=$((failures + 1))
 

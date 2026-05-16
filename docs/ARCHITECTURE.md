@@ -81,11 +81,22 @@ Main responsibilities:
 - expose JSFT shadow dashboard pages and APIs
 - run the JSFT history updater script
 - keep JSFT research/shadow behavior separate from the 5173 JSSC live loop
+- publish frozen window status, data quality, and live shadow metrics
+
+5173 can view 5174 status via proxy APIs (`/api/jsft-shadow/*`) but 5174 does not participate in the 5173 JSSC live runtime loop.
+
+### 5173/5174 Integration
+
+- 5173 backend proxies JSFT shadow state through `/api/jsft-shadow/state`, `/api/jsft-shadow/replay`, `/api/jsft-shadow/data-quality`, `/api/jsft-shadow/shadow-status`
+- These proxy APIs require 5173 login (same cookie auth as other dashboard APIs)
+- If `PK10_JSFT_SHADOW_TOKEN` is set, the proxy passes an `Authorization: Bearer` header to 5174
+- 5173 frontend displays a standalone JSFT Shadow panel (not mixed into JSSC bankroll curve)
+- 5174 remains independently accessible on port 5174
 
 Important runtime files:
 
 - `/root/jsft_pk10/.env`: process environment loaded by PM2
-- `/root/jsft_pk10/data/`: local replay outputs and updater state
+- `/root/jsft_pk10/data/`: local replay outputs, shadow log, and updater state
 
 ## Database Tables
 

@@ -435,15 +435,19 @@ async def api_history_issues(
 async def api_history_by_code(
     date: str,
     code: str,
+    source_code: str = "jssc",
     _: dict[str, Any] = Depends(get_current_user),
 ) -> dict:
     date = str(date or "").strip()
     code = str(code or "").strip()
+    source_code = str(source_code or "").strip().lower()
     if not date or not code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="date 和 code 不能为空",
         )
+
+    table_name = _history_issue_table(source_code)
 
     issue_sql = f"""
     SELECT
@@ -460,7 +464,7 @@ async def api_history_by_code(
         fourth_dt,
         fifth_dt,
         group_code
-    FROM {settings.db_table}
+    FROM {table_name}
     WHERE draw_date = %s
       AND pre_draw_code = %s
     ORDER BY pre_draw_time, pre_draw_issue
@@ -537,6 +541,8 @@ async def api_history_by_code(
     return {
         "date": date,
         "code": code,
+        "source_code": source_code,
+        "table": table_name,
         "issues": issues,
         "bets": bets,
         "broadcasts": broadcasts,
@@ -546,6 +552,55 @@ async def api_history_by_code(
             "broadcasts": len(broadcasts),
         },
     }
+
+
+def _proxy_jsft_shadow(path: str) -> dict[str, Any]:
+    import requests as _requests
+
+    url = f"{settings.jsft_shadow_base_url.rstrip('/')}{path}"
+    headers: dict[str, str] = {"Accept": "application/json"}
+    token = settings.jsft_shadow_token.strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = _requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except _requests.exceptions.ConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"JSFT shadow service unreachable: {exc}",
+        ) from exc
+    except _requests.exceptions.Timeout as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"JSFT shadow service timeout: {exc}",
+        ) from exc
+    except _requests.exceptions.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"JSFT shadow service error: {exc}",
+        ) from exc
+
+
+@app.get("/api/jsft-shadow/state")
+async def api_jsft_shadow_state(_: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    return _proxy_jsft_shadow("/api/state")
+
+
+@app.get("/api/jsft-shadow/replay")
+async def api_jsft_shadow_replay(_: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    return _proxy_jsft_shadow("/api/replay")
+
+
+@app.get("/api/jsft-shadow/data-quality")
+async def api_jsft_shadow_data_quality(_: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    return _proxy_jsft_shadow("/api/data-quality")
+
+
+@app.get("/api/jsft-shadow/shadow-status")
+async def api_jsft_shadow_shadow_status(_: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    return _proxy_jsft_shadow("/api/shadow/status")
 
 
 @app.get("/events/stream")

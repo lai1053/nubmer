@@ -838,6 +838,131 @@ function useDashboard(onUnauthorized) {
   }
 }
 
+function JSFTShadowPanel({ apiJson }) {
+  const [shadowState, setShadowState] = useState(null)
+  const [error, setError] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    let isMounted = true
+    async function load() {
+      setIsLoading(true)
+      setError('')
+      try {
+        const data = await apiJson('/api/jsft-shadow/state')
+        if (isMounted) setShadowState(data)
+      } catch (err) {
+        if (isMounted) setError(err.message || '无法连接 JSFT Shadow')
+      } finally {
+        if (isMounted) setIsLoading(false)
+      }
+    }
+    load()
+    const timer = setInterval(load, 60000)
+    return () => {
+      isMounted = false
+      clearInterval(timer)
+    }
+  }, [apiJson])
+
+  if (isLoading && !shadowState) {
+    return (
+      <section className="card" style={{ marginTop: 24 }}>
+        <div className="section-head">
+          <div>
+            <div className="section-eyebrow">JSFT SHADOW</div>
+            <h2>JSFT 影子监控</h2>
+          </div>
+        </div>
+        <div className="empty">正在加载 JSFT Shadow 状态…</div>
+      </section>
+    )
+  }
+
+  if (error) {
+    return (
+      <section className="card" style={{ marginTop: 24 }}>
+        <div className="section-head">
+          <div>
+            <div className="section-eyebrow">JSFT SHADOW</div>
+            <h2>JSFT 影子监控</h2>
+          </div>
+        </div>
+        <div className="empty" style={{ color: 'var(--danger)' }}>{error}</div>
+      </section>
+    )
+  }
+
+  if (!shadowState || shadowState.status !== 'ok') {
+    return (
+      <section className="card" style={{ marginTop: 24 }}>
+        <div className="section-head">
+          <div>
+            <div className="section-eyebrow">JSFT SHADOW</div>
+            <h2>JSFT 影子监控</h2>
+          </div>
+        </div>
+        <div className="empty">JSFT 数据未就绪 · {shadowState?.status || 'unknown'}</div>
+      </section>
+    )
+  }
+
+  const sh = shadowState
+  const ss = sh.live_shadow_status || {}
+  const gate = sh.next_decision?.gate_state || {}
+  const dq = sh.data_quality_summary || {}
+  const target = sh.target || {}
+
+  return (
+    <section className="card" style={{ marginTop: 24 }}>
+      <div className="section-head">
+        <div>
+          <div className="section-eyebrow">JSFT SHADOW</div>
+          <h2>JSFT 影子监控</h2>
+        </div>
+        <div className="section-note">
+          <a href="http://8.148.182.237:5174/" target="_blank" rel="noopener noreferrer" style={{ marginRight: 12 }}>
+            5174 面板 →
+          </a>
+          <span className={`profile-chip ${sh.deployment_level === 'core_shadow' ? 'shadow' : 'live'}`}>
+            {sh.deployment_level || 'shadow'}
+          </span>
+          <span style={{ marginLeft: 8, fontSize: 12 }}>
+            champion: {sh.champion_ready ? 'YES' : 'NO'}
+          </span>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12, marginBottom: 18 }}>
+        <MiniStat label="frozen_window_id" value={sh.frozen_window_id || '—'} />
+        <MiniStat label="gate_id" value={sh.gate_id || '—'} />
+        <MiniStat label="latest_complete_date" value={sh.latest_complete_date || '—'} />
+        <MiniStat label="core_shadow_ready" value={sh.core_shadow_ready ? 'YES' : 'NO'} accent={sh.core_shadow_ready ? 'positive' : 'negative'} />
+        <MiniStat label="gate active" value={gate.active ? '开窗' : '空仓'} accent={gate.active ? 'positive' : ''} />
+        <MiniStat label="gate reason" value={gate.reason || '—'} />
+        <MiniStat label="target date" value={target.date || '—'} />
+        <MiniStat label="target kind" value={target.kind || '—'} />
+        <MiniStat label="anomaly days" value={dq.anomaly_date_count ?? '—'} accent={dq.anomaly_date_count > 0 ? 'negative' : ''} />
+        <MiniStat label="leakage free" value={sh.leakage_check?.leakage_free ? 'YES' : '—'} accent={sh.leakage_check?.leakage_free ? 'positive' : 'negative'} />
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--line)', paddingTop: 14, marginTop: 8 }}>
+        <div className="section-eyebrow" style={{ marginBottom: 10 }}>LIVE SHADOW 13-DAY STATUS</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
+          <MiniStat label="shadow days" value={ss.live_shadow_days || 0} />
+          <MiniStat label="latest settled" value={ss.latest_settled_date || '—'} />
+          <MiniStat label="live13_real" value={fmtNumber(ss.live13_real)} accent={Number(ss.live13_real) >= 0 ? 'positive' : 'negative'} />
+          <MiniStat label="live13_ledger" value={fmtNumber(ss.live13_ledger)} accent={Number(ss.live13_ledger) >= 0 ? 'positive' : 'negative'} />
+          <MiniStat label="live13_bonus" value={fmtNumber(ss.live13_bonus)} />
+          <MiniStat label="live13 positive days" value={ss.live13_positive_days || 0} />
+          <MiniStat label="live13 max drawdown" value={fmtNumber(ss.live13_max_drawdown)} accent="negative" />
+          <MiniStat label="pass candidate" value={ss.core_shadow_pass_candidate ? 'YES' : 'NO'} accent={ss.core_shadow_pass_candidate ? 'positive' : 'negative'} />
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') return false
@@ -1498,6 +1623,9 @@ function DashboardPage({ user, onLogout, onOpenAdmin, onUnauthorized }) {
           />
         </div>
       </section>
+
+      <JSFTShadowPanel apiJson={(url, options) => readApiJson(url, options, onUnauthorized)} />
+
     </main>
   )
 }
