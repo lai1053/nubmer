@@ -74,6 +74,7 @@ class ShadowLogPayload(BaseModel):
     recommended_mode: str = "core"
     active_windows: str = "sum12_cap15"
     would_execute_bets_count: int = CORE_CAP
+    executed_bets: int = 0
     account_daily_ledger_shadow: float
     account_daily_real_shadow: float
     account_daily_bonus_shadow: float
@@ -308,8 +309,8 @@ def account_replay(
     latest_gate_state: dict[str, Any] | None = None
     total_skipped_due_to_bankroll = 0
 
-    unconstrained_bankroll = BANKROLL_START
-    unconstrained_peak = BANKROLL_START
+    unconstrained_running_real = 0.0
+    unconstrained_peak = 0.0
     unconstrained_max_dd = 0.0
     unconstrained_daily_rows: list[dict[str, Any]] = []
 
@@ -327,19 +328,13 @@ def account_replay(
             if BASE_STAKE > 0 and bankroll > 0
             else 0
         )
-        unconstrained_affordable = (
-            max(0, int(unconstrained_bankroll // BASE_STAKE))
-            if BASE_STAKE > 0 and unconstrained_bankroll > 0
-            else 0
-        )
-
         funded_rows = (
             rows_data[: min(len(rows_data), affordable_bets)]
             if gate_state["active"]
             else []
         )
         unconstrained_rows = (
-            rows_data[: min(len(rows_data), unconstrained_affordable)]
+            rows_data[:]  # all selected rows, no bankroll limit
             if gate_state["active"]
             else []
         )
@@ -385,10 +380,9 @@ def account_replay(
             ticket_ledger = (SUM12_NET_ODDS if hit else -1.0) * BASE_STAKE
             unconstrained_ledger += ticket_ledger
         unconstrained_real = settle_real(unconstrained_ledger)
-        unconstrained_before = unconstrained_bankroll
-        unconstrained_bankroll += unconstrained_real
-        unconstrained_peak = max(unconstrained_peak, unconstrained_bankroll)
-        unconstrained_dd = unconstrained_bankroll - unconstrained_peak
+        unconstrained_running_real += unconstrained_real
+        unconstrained_peak = max(unconstrained_peak, unconstrained_running_real)
+        unconstrained_dd = unconstrained_running_real - unconstrained_peak
         unconstrained_max_dd = min(unconstrained_max_dd, unconstrained_dd)
 
         daily_rows.append(
@@ -422,8 +416,6 @@ def account_replay(
         unconstrained_daily_rows.append(
             {
                 "date": draw_date,
-                "bankroll_start": round(unconstrained_before, 4),
-                "bankroll_end": round(unconstrained_bankroll, 4),
                 "window_active": bool(gate_state["active"]),
                 "gate_reason": gate_state["reason"],
                 "requested_bets": int(len(rows_data) if gate_state["active"] else 0),
@@ -431,6 +423,7 @@ def account_replay(
                 "hits": int(unconstrained_hits),
                 "ledger": round(unconstrained_ledger, 4),
                 "real": round(unconstrained_real, 4),
+                "running_real": round(unconstrained_running_real, 4),
                 "bankroll_constrained": False,
             }
         )
@@ -476,8 +469,7 @@ def account_replay(
     }
 
     unconstrained_totals = {
-        "bankroll_current": round(unconstrained_bankroll, 4),
-        "total_real": round(unconstrained_bankroll - BANKROLL_START, 4),
+        "total_real": round(unconstrained_running_real, 4),
         "total_ledger": round(
             sum(row["ledger"] for row in unconstrained_daily_rows), 4
         ),
@@ -490,6 +482,7 @@ def account_replay(
         ),
         "max_drawdown": round(unconstrained_max_dd, 4),
         "bankroll_constrained": False,
+        "unconstrained_note": "No bankroll limit, all active gate rows taken.",
     }
 
     return {
@@ -606,34 +599,137 @@ def get_data_quality_summary() -> dict[str, Any]:
     }
 
 
+def build_preday_decision(
+    prior_base_days: list[dict[str, Any]],
+    expected_count: int,
+    today_observed_count: int = 0,
+) -> dict[str, Any]:
+    gate_state = daily_gate_state(prior_base_days)
+    recommended_mode = "core" if gate_state["active"] else "cash"
+    active_slots = uniform_slots(expected_count, CORE_CAP)
+    slots: list[dict[str, Any]] = []
+    for slot in active_slots:
+        if slot <= today_observed_count:
+            status = "observed"
+        else:
+            status = "pending"
+        slots.append({"slot": slot, "status": status})
+    would_execute_bets_count = (
+        len([s for s in slots if s["status"] == "pending"])
+        if gate_state["active"]
+        else 0
+    )
+    return {
+        "active": gate_state["active"],
+        "gate_reason": gate_state["reason"],
+        "recommended_mode": recommended_mode,
+        "would_execute_bets_count": would_execute_bets_count,
+        "slots": slots,
+    }
+
+
 def leakage_check() -> dict[str, Any]:
     if not table_exists():
         return {
             "status": "missing_table",
             "checked_days": 0,
             "failed_days": 0,
+            "failed_rate": 0.0,
             "leakage_free": True,
+            "rows": [],
         }
     expected_count = EXPECTED_ISSUES_PER_DAY
     result = account_replay(expected_count)
     daily = result.get("daily", [])
+    if not daily:
+        return {
+            "status": "empty_replay",
+            "checked_days": 0,
+            "failed_days": 0,
+            "failed_rate": 0.0,
+            "leakage_free": True,
+            "rows": [],
+        }
+
+    selected, _ = replay_selected_rows(expected_count)
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in selected:
+        by_day.setdefault(str(row["draw_date"]), []).append(row)
+
+    base_days: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     checked = 0
     failed = 0
-    for row in daily:
-        date_str = str(row["date"])
+
+    sorted_dates = [str(r["date"]) for r in daily]
+    for idx, day_row in enumerate(daily):
+        date_str = str(day_row["date"])
         checked += 1
-        gate_reason = str(row.get("gate_reason", ""))
-        prior_days_match = True
-        base_dates = [str(d["date"]) for d in daily if str(d["date"]) < date_str]
-        base_dates_count = len(base_dates)
-        if "prior_days" not in gate_reason and base_dates_count < 26:
-            pass
+
+        today_rows = by_day.get(date_str, [])
+        today_observed_count = len(today_rows)
+
+        original_decision = {
+            "active": bool(day_row.get("window_active", False)),
+            "gate_reason": str(day_row.get("gate_reason", "")),
+            "recommended_mode": (
+                "core" if bool(day_row.get("window_active", False)) else "cash"
+            ),
+            "would_execute_bets_count": int(day_row.get("requested_bets", 0)),
+        }
+
+        masked_decision = build_preday_decision(
+            base_days, expected_count, today_observed_count=0
+        )
+
+        prior_for_masked = [
+            str(d["date"]) for d in base_days
+        ]
+        base_days.append(summarize_base_day(date_str, today_rows))
+
+        decision_equal = (
+            original_decision["active"] == masked_decision["active"]
+            and original_decision["recommended_mode"]
+            == masked_decision["recommended_mode"]
+            and original_decision["gate_reason"] == masked_decision["gate_reason"]
+        )
+
+        failed_reason = ""
+        if not decision_equal:
+            failed += 1
+            parts = []
+            if original_decision["active"] != masked_decision["active"]:
+                parts.append(
+                    f"active: orig={original_decision['active']} masked={masked_decision['active']}"
+                )
+            if original_decision["recommended_mode"] != masked_decision["recommended_mode"]:
+                parts.append(
+                    f"mode: orig={original_decision['recommended_mode']} masked={masked_decision['recommended_mode']}"
+                )
+            if original_decision["gate_reason"] != masked_decision["gate_reason"]:
+                parts.append(
+                    f"gate_reason differs"
+                )
+            failed_reason = "; ".join(parts)
+
+        rows.append(
+            {
+                "date": date_str,
+                "decision_original": original_decision,
+                "decision_masked": masked_decision,
+                "decision_equal": decision_equal,
+                "failed_reason": failed_reason,
+            }
+        )
+
     return {
         "status": "ok",
         "checked_days": checked,
         "failed_days": failed,
+        "failed_rate": round(failed / max(checked, 1), 6),
         "leakage_free": failed == 0,
-        "method": "Pre-day gate uses only base_days with date < current_day.date. No future data is referenced.",
+        "method": "For each replay day, gate is recomputed from prior base_days only (masked today) and compared with original decision.",
+        "rows": rows,
     }
 
 
@@ -649,6 +745,7 @@ def ensure_shadow_log() -> None:
                 "recommended_mode",
                 "active_windows",
                 "would_execute_bets_count",
+                "executed_bets",
                 "account_daily_ledger_shadow",
                 "account_daily_real_shadow",
                 "account_daily_bonus_shadow",
@@ -695,20 +792,19 @@ def settle_latest_complete_day() -> dict[str, Any]:
             "date": latest_date,
             "message": f"Date {latest_date} not found in replay daily data.",
         }
-    gate_state = account.get("next_gate_state", {})
-    gate_reason = gate_state.get("reason", "")
+    day_active = bool(day_row.get("window_active", False))
+    day_gate_reason = str(day_row.get("gate_reason", ""))
     payload = ShadowLogPayload(
         date=latest_date,
-        recommended_mode=(
-            "core" if gate_state.get("active", False) else "cash"
-        ),
+        recommended_mode=("core" if day_active else "cash"),
         active_windows=FROZEN_WINDOW_ID,
         would_execute_bets_count=int(day_row.get("requested_bets", 0)),
+        executed_bets=int(day_row.get("bets", 0)),
         account_daily_ledger_shadow=float(day_row.get("ledger", 0)),
         account_daily_real_shadow=float(day_row.get("real", 0)),
         account_daily_bonus_shadow=float(day_row.get("bonus", 0)),
         data_quality_ok=bool(latest_complete["is_full_day"]),
-        gate_reason=gate_reason,
+        gate_reason=day_gate_reason,
         notes=f"auto-settled at {now_iso()}",
     )
     ensure_shadow_log()
@@ -721,6 +817,7 @@ def settle_latest_complete_day() -> dict[str, Any]:
                 payload.recommended_mode,
                 payload.active_windows,
                 payload.would_execute_bets_count,
+                payload.executed_bets,
                 payload.account_daily_ledger_shadow,
                 payload.account_daily_real_shadow,
                 payload.account_daily_bonus_shadow,
@@ -737,6 +834,7 @@ def settle_latest_complete_day() -> dict[str, Any]:
             "recommended_mode": payload.recommended_mode,
             "active_windows": payload.active_windows,
             "would_execute_bets_count": payload.would_execute_bets_count,
+            "executed_bets": payload.executed_bets,
             "account_daily_ledger_shadow": payload.account_daily_ledger_shadow,
             "account_daily_real_shadow": payload.account_daily_real_shadow,
             "account_daily_bonus_shadow": payload.account_daily_bonus_shadow,
@@ -1148,6 +1246,7 @@ async def append_shadow_log(payload: ShadowLogPayload) -> dict[str, Any]:
                 payload.recommended_mode,
                 payload.active_windows,
                 payload.would_execute_bets_count,
+                payload.executed_bets,
                 payload.account_daily_ledger_shadow,
                 payload.account_daily_real_shadow,
                 payload.account_daily_bonus_shadow,
