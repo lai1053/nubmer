@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import os
@@ -57,6 +58,11 @@ SETTLEMENT_MODE = _frozen["settlement"]
 app = FastAPI(title=APP_NAME)
 _ACCOUNT_CACHE: dict[str, Any] = {"key": None, "expires_at": 0.0, "value": None}
 _ISSUE_COUNTS_CACHE: dict[str, Any] = {"expires_at": 0.0, "value": None}
+
+_STATE_SNAPSHOT: dict[str, Any] | None = None
+_STATE_GENERATED_AT: float = 0.0
+_STATE_REFRESH_SECONDS: int = int(os.getenv("JSFT_STATE_REFRESH_SECONDS", "120"))
+_STATE_BUSY = False
 
 try:
     _tz = __import__("zoneinfo", fromlist=["ZoneInfo"]).ZoneInfo(TIMEZONE)
@@ -1184,6 +1190,37 @@ def _health_path(request: Request) -> bool:
     return request.url.path.rstrip("/") in {"/api/health", "/api/frozen-windows"}
 
 
+async def _refresh_state_snapshot() -> None:
+    global _STATE_SNAPSHOT, _STATE_GENERATED_AT, _STATE_BUSY
+    if _STATE_BUSY:
+        return
+    _STATE_BUSY = True
+    try:
+        snapshot = await asyncio.to_thread(latest_summary)
+        _STATE_SNAPSHOT = snapshot
+        _STATE_GENERATED_AT = time.monotonic()
+    except Exception:
+        pass
+    finally:
+        _STATE_BUSY = False
+
+
+async def _background_refresher() -> None:
+    while True:
+        await asyncio.sleep(5)
+        if _STATE_SNAPSHOT is None:
+            await _refresh_state_snapshot()
+            continue
+        elapsed = time.monotonic() - _STATE_GENERATED_AT
+        if elapsed > _STATE_REFRESH_SECONDS:
+            await _refresh_state_snapshot()
+
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    asyncio.create_task(_background_refresher())
+
+
 @app.middleware("http")
 async def token_middleware(request: Request, call_next):
     if not _health_path(request) and SHADOW_API_TOKEN.strip():
@@ -1235,6 +1272,8 @@ async def api_frozen_windows() -> dict[str, Any]:
 
 @app.get("/api/state")
 async def state() -> dict[str, Any]:
+    if _STATE_SNAPSHOT is not None:
+        return _STATE_SNAPSHOT
     try:
         return latest_summary()
     except Exception as exc:
