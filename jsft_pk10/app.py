@@ -1453,22 +1453,6 @@ HTML = r"""<!doctype html>
     .pos { color: var(--ok); font-weight: 800; }
     .neg { color: var(--bad); font-weight: 800; }
     .table-wrap { overflow: auto; max-height: 520px; }
-    .slots {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-      gap: 8px;
-    }
-    .slot {
-      border: 1px solid var(--line);
-      background: #fbf7ed;
-      padding: 10px;
-      min-height: 70px;
-    }
-    .slot.pending, .slot.planned { border-color: rgba(14,95,111,.42); background: #edf7f7; }
-    .slot.missed { color: #777; background: #eee8dd; }
-    .slot.stale_missed, .slot.stale_unavailable { color: #82786b; background: #eee8dd; }
-    .slot b { display: block; font-size: 18px; }
-    .slot small { display: block; margin-top: 5px; color: var(--muted); }
     .curve { display: grid; gap: 8px; }
     .bar-row { display: grid; grid-template-columns: 88px 1fr 78px; gap: 10px; align-items: center; font-size: 12px; }
     .bar-track { height: 16px; background: var(--field); border: 1px solid var(--line); position: relative; overflow: hidden; }
@@ -1518,10 +1502,10 @@ HTML = r"""<!doctype html>
         <div id="curve" class="curve"></div>
       </section>
     </div>
-    <section style="margin-top:18px">
-      <h2>计划 slot</h2>
-      <div id="slots" class="slots"></div>
-    </section>
+     <section style="margin-top:18px">
+       <h2>今日 slot 执行表</h2>
+       <div id="slots"></div>
+     </section>
     <section style="margin-top:18px">
       <h2>每天真实情况</h2>
       <div id="daily" class="table-wrap"></div>
@@ -1641,12 +1625,31 @@ HTML = r"""<!doctype html>
         metric('前13日real', signed(gate.prior13_real || 0), Number(gate.prior13_real || 0) >= 0 ? 'good' : 'bad'),
         metric('前26日real', signed(gate.prior26_real || 0), Number(gate.prior26_real || 0) >= 0 ? 'good' : 'bad')
       ].join('')
-      slotsEl.innerHTML = (core.decision_slots || []).length ? (core.decision_slots || []).map(slot => `
-        <div class="slot ${slot.status}">
-          <b>#${slot.slot}</b>
-          <small>和值 ${slot.sum_value}</small>
-          <small>${slot.status}${slot.expected_issue ? ' · issue ' + slot.expected_issue : ''}</small>
-        </div>`).join('') : `<div class="metric" style="grid-column:1/-1"><span>今日窗口</span><strong>不开窗 / 空仓</strong><small>${gate.reason || ''}</small></div>`
+      const statusLabel = {
+        pending: '待执行', missed: '已错过', planned: '计划中',
+        stale_missed: '已过期', stale_unavailable: '不可用'
+      }
+      const statusTone = (s) => s === 'pending' ? 'pos' : (s === 'planned' ? '' : 'neg')
+      const decisionSlots = core.decision_slots || []
+      slotsEl.innerHTML = decisionSlots.length ? `
+        <div class="table-wrap" style="max-height:none">
+        <table>
+          <thead><tr><th class="num">期位 #</th><th class="num">预期期号</th><th>选择</th><th>状态</th></tr></thead>
+          <tbody>${decisionSlots.map(slot => `
+            <tr>
+              <td class="num"><b>${slot.slot}</b></td>
+              <td class="num">${slot.expected_issue || '—'}</td>
+              <td>冠亚和 ${slot.sum_value}</td>
+              <td class="${statusTone(slot.status)}">${statusLabel[slot.status] || slot.status}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+        <div style="margin-top:10px;font-size:13px;color:var(--muted)">
+          开窗下共 <b>${decisionSlots.length}</b> 个 slot，其中
+          <b style="color:var(--ok)">${decisionSlots.filter(s => s.status==='pending').length} 待执行</b> · 
+          <b style="color:var(--bad)">${decisionSlots.filter(s => s.status==='missed').length} 已错过</b>
+          ${decisionSlots.filter(s => s.status==='planned').length ? ' · <b>' + decisionSlots.filter(s => s.status==='planned').length + ' 计划中</b>' : ''}
+        </div>
+      ` : `<div class="metric" style="grid-column:1/-1"><span>今日窗口</span><strong>不开窗 / 空仓</strong><small>${gate.reason || ''}</small></div>`
       dailyEl.innerHTML = `
         <table>
           <thead><tr><th>日期</th><th>窗口</th><th class="num">下注</th><th class="num">命中</th><th class="num">账面</th><th class="num">真实</th><th class="num">结算差</th><th class="num">日末积分</th><th class="num">bankroll skip</th></tr></thead>
