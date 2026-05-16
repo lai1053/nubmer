@@ -1,0 +1,28 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node/Vite
+node_modules/
+dist/
+.vite/
+
+# Runtime config and logs
+.env
+.env.*
+!.env.example
+*.log
+*.pid
+
+# Local editor state
+.idea/
+.vscode/
+*.swp
+*.swo
