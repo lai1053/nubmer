@@ -1802,17 +1802,40 @@ HTML = r"""<!doctype html>
         ].join('')
 
         const daily = (jsft.account || {}).daily || []
+        // compute running ledger for each day
+        let runningLedger = Number(jsft.account?.totals?.bankroll_start || 1000)
+        const ledgerMap = {}
+        daily.forEach(r => { runningLedger += Number(r.ledger || 0); ledgerMap[r.date] = runningLedger })
         jsftTableEl.innerHTML = `
           <table>
-            <thead><tr><th>日期</th><th>窗</th><th class="num">下注</th><th class="num">命中</th><th class="num">账面</th><th class="num">真实</th><th class="num">日末</th></tr></thead>
+            <thead><tr><th>日期</th><th>窗</th><th class="num">下注</th><th class="num">命中</th><th class="num">账面</th><th class="num">真实</th><th class="num">账面日末</th><th class="num">日末</th></tr></thead>
             <tbody>${daily.slice().reverse().map(r => `
               <tr>
                 <td>${r.date}</td><td>${r.window_active?'开':'空'}</td>
                 <td class="num">${r.bets}</td><td class="num">${r.hits}</td>
                 <td class="num ${cls(r.ledger)}">${signed(r.ledger)}</td>
                 <td class="num ${cls(r.real)}">${signed(r.real)}</td>
+                <td class="num ${cls(ledgerMap[r.date] - 1000)}">${fmt(ledgerMap[r.date])}</td>
                 <td class="num">${fmt(r.bankroll_end)}</td>
-              </tr>`).join('')}</tbody>
+              </tr>
+              ${r.bets > 0 && r.tickets && r.tickets.length ? `
+              <tr style="background:var(--bg)">
+                <td colspan="8" style="padding:4px 8px;font-size:11px">
+                  <details><summary style="cursor:pointer;color:var(--muted)">明细：${r.tickets.length} 注</summary>
+                  <table style="margin-top:4px">
+                    <thead><tr><th class="num">期位 #</th><th class="num">期号</th><th>时间</th><th>选择</th><th>结果</th><th class="num">盈亏</th></tr></thead>
+                    <tbody>${r.tickets.map(t => `
+                      <tr>
+                        <td class="num">${t.slot_1based}</td>
+                        <td class="num">${t.pre_draw_issue}</td>
+                        <td>${t.pre_draw_time||''}</td>
+                        <td>${t.selection}</td>
+                        <td>${t.sum_fs}${t.hit?' <span class="pos">命中</span>':' <span class="neg">未中</span>'}</td>
+                        <td class="num ${cls(t.ledger)}">${signed(t.ledger)}</td>
+                      </tr>`).join('')}</tbody>
+                  </table></details></td>
+              </tr>` : ''}
+            `).join('')}</tbody>
           </table>`
       } else {
         jsftCardsEl.innerHTML = '<div class="metric full-width"><span>JSFT</span><strong>数据未就绪</strong></div>'
