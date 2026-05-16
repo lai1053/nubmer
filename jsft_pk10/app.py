@@ -654,7 +654,7 @@ def leakage_check() -> dict[str, Any]:
             "rows": [],
         }
 
-    result = account_replay(expected_count)
+    result = cached_account_replay(expected_count)
     daily_map: dict[str, dict[str, Any]] = {
         str(row["date"]): row for row in result.get("daily", [])
     }
@@ -819,7 +819,7 @@ def settle_latest_complete_day() -> dict[str, Any]:
             "message": f"Date {latest_date} already in shadow log.",
         }
     expected_count = EXPECTED_ISSUES_PER_DAY
-    account = account_replay(expected_count)
+    account = cached_account_replay(expected_count)
     daily_rows = account.get("daily", [])
     day_row = None
     for row in daily_rows:
@@ -988,7 +988,6 @@ def latest_summary() -> dict[str, Any]:
     )
     shadow_stat = shadow_status()
     dq = get_data_quality_summary()
-    leakage = leakage_check()
 
     return {
         "table_exists": True,
@@ -1007,7 +1006,6 @@ def latest_summary() -> dict[str, Any]:
             "slots": slots,
         },
         "live_shadow_status": shadow_stat,
-        "leakage_check": leakage,
         "db": {
             "host": DB_HOST,
             "port": DB_PORT,
