@@ -1821,19 +1821,11 @@ HTML = r"""<!doctype html>
               ${r.bets > 0 && r.tickets && r.tickets.length ? `
               <tr style="background:var(--bg)">
                 <td colspan="8" style="padding:4px 8px;font-size:11px">
-                  <details><summary style="cursor:pointer;color:var(--muted)">明细：${r.tickets.length} 注</summary>
-                  <table style="margin-top:4px">
-                    <thead><tr><th class="num">期位 #</th><th class="num">期号</th><th>时间</th><th>选择</th><th>结果</th><th class="num">盈亏</th></tr></thead>
-                    <tbody>${r.tickets.map(t => `
-                      <tr>
-                        <td class="num">${t.slot_1based}</td>
-                        <td class="num">${t.pre_draw_issue}</td>
-                        <td>${t.pre_draw_time||''}</td>
-                        <td>${t.selection}</td>
-                        <td>${t.sum_fs}${t.hit?' <span class="pos">命中</span>':' <span class="neg">未中</span>'}</td>
-                        <td class="num ${cls(t.ledger)}">${signed(t.ledger)}</td>
-                      </tr>`).join('')}</tbody>
-                  </table></details></td>
+                  ${r.tickets.map(t => `<span style="display:inline-block;margin:2px 6px 2px 0;white-space:nowrap">
+                    #${t.slot_1based} <span class="num">期${t.pre_draw_issue}</span>
+                    ${t.hit ? '<span class="pos">✓命中</span>' : '<span class="neg">✗</span>'}
+                  </span>`).join('')}
+                </td>
               </tr>` : ''}
             `).join('')}</tbody>
           </table>`
