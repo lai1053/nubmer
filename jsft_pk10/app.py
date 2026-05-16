@@ -110,6 +110,76 @@ def query(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
             return list(cursor.fetchall())
 
 
+def execute(sql: str, params: tuple[Any, ...] = ()) -> None:
+    with db_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+
+
+def _persist_bets(draw_date: str, tickets: list[dict[str, Any]]) -> None:
+    if not tickets:
+        return
+    try:
+        values_parts: list[str] = []
+        params: list[Any] = []
+        for t in tickets:
+            values_parts.append("(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            hit = int(t["hit"])
+            pnl_val = round(t["ledger"], 4)
+            params.extend([
+                draw_date,
+                int(t["pre_draw_issue"]),
+                int(t["slot_1based"]),
+                "冠亚和 12",
+                BASE_STAKE,
+                BASE_STAKE,
+                hit,
+                "hit" if hit else "miss",
+                pnl_val,
+                SUM12_NET_ODDS,
+                "settled",
+                json.dumps({"sum_value": CORE_SUM_VALUE, "play": "冠亚和", "sum_fs": t.get("sum_fs", 0)}),
+                json.dumps({"frozen_window_id": FROZEN_WINDOW_ID}),
+            ])
+        sql = f"""
+            INSERT IGNORE INTO jsft_bet_log
+                (draw_date, pre_draw_issue, slot_1based,
+                 odds_display, stake, total_cost, hit_count,
+                 outcome_label, pnl, multiplier_value, status,
+                 selection_json, meta_json)
+            VALUES {", ".join(values_parts)}
+        """
+        execute(sql, tuple(params))
+    except Exception:
+        pass
+    execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS jsft_bet_log (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            draw_date DATE NOT NULL,
+            pre_draw_issue BIGINT NULL,
+            slot_1based INT NOT NULL,
+            line_name VARCHAR(32) NOT NULL DEFAULT 'sum',
+            status VARCHAR(16) NOT NULL DEFAULT 'settled',
+            selection_json JSON NOT NULL,
+            odds_display VARCHAR(255) NOT NULL,
+            stake DECIMAL(12,2) NOT NULL,
+            multiplier_value INT NOT NULL DEFAULT 1,
+            ticket_count INT NOT NULL DEFAULT 1,
+            total_cost DECIMAL(12,2) NOT NULL,
+            hit_count INT NULL,
+            outcome_label VARCHAR(255) NULL,
+            pnl DECIMAL(12,4) NULL,
+            meta_json JSON NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_line_issue_slot (draw_date, line_name, slot_1based),
+            KEY idx_draw_date (draw_date),
+            KEY idx_issue (pre_draw_issue)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """
+    )
+
+
 def table_exists() -> bool:
     rows = query(
         """
@@ -419,6 +489,8 @@ def account_replay(
                 "tickets": tickets,
             }
         )
+        if bankroll_constrained and draw_date >= REPLAY_START_DATE:
+            _persist_bets(draw_date, tickets)
 
         unconstrained_daily_rows.append(
             {
@@ -1218,6 +1290,7 @@ async def _background_refresher() -> None:
 
 @app.on_event("startup")
 async def _on_startup() -> None:
+    await asyncio.to_thread(ensure_bet_log_table)
     asyncio.create_task(_background_refresher())
 
 
@@ -1372,6 +1445,38 @@ async def api_shadow_settle() -> dict[str, Any]:
     return settle_latest_complete_day()
 
 
+@app.get("/api/jsft-bet-log")
+async def api_jsft_bet_log(page: int = 1, page_size: int = 60) -> dict[str, Any]:
+    page = max(1, int(page))
+    page_size = max(10, min(200, int(page_size)))
+    offset = (page - 1) * page_size
+    try:
+        total_rows = query("SELECT COUNT(*) AS cnt FROM jsft_bet_log")
+        total = int(total_rows[0]["cnt"]) if total_rows else 0
+        rows = query(
+            """
+            SELECT
+                id, draw_date, pre_draw_issue, slot_1based,
+                odds_display, stake, total_cost, hit_count,
+                outcome_label, pnl, status,
+                DATE_FORMAT(created_at, '%%Y-%%m-%%d %%H:%%i:%%s') AS created_at
+            FROM jsft_bet_log
+            ORDER BY draw_date DESC, slot_1based DESC
+            LIMIT %s OFFSET %s
+            """,
+            (page_size, offset),
+        )
+        return {
+            "rows": rows,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": max(1, (total + page_size - 1) // page_size) if total else 1,
+        }
+    except Exception:
+        return {"rows": [], "page": 1, "page_size": page_size, "total": 0, "total_pages": 1}
+
+
 @app.get("/api/jssc-daily-curve")
 async def api_jssc_daily_curve() -> dict[str, Any]:
     try:
@@ -1496,6 +1601,10 @@ HTML = r"""<!doctype html>
         <h2>JSFT 影子推演 <span style="font-weight:400;font-size:13px;color:var(--muted)">sum12_cap15 · g13_26_pos · daily85</span></h2>
         <div class="cards" id="jsftCards"></div>
         <div class="table-wrap" id="jsftTable" style="margin-top:14px"></div>
+        <details style="margin-top:12px">
+          <summary style="cursor:pointer;font-size:13px;color:var(--muted)">投注明细日志（已落库 jsft_bet_log）</summary>
+          <div class="table-wrap" id="jsftBetLog" style="margin-top:8px;max-height:300px"></div>
+        </details>
       </section>
       <section>
         <h2>JSSC 实盘 <span style="font-weight:400;font-size:13px;color:var(--muted)">face+sum+exact · 日级结算</span></h2>
@@ -1677,11 +1786,33 @@ HTML = r"""<!doctype html>
           fetch('/api/jssc-daily-curve', { cache: 'no-store' }).then(r => r.json())
         ])
         renderCombined(jsftRes, jsscRes)
+        loadBetLog()
       } catch (e) {
         statusEl.className = 'badge bad'
         statusEl.textContent = '错误'
         console.error(e)
       }
+    }
+
+    async function loadBetLog() {
+      try {
+        const data = await fetch('/api/jsft-bet-log?page_size=200').then(r => r.json())
+        const el = document.getElementById('jsftBetLog')
+        if (!el || !data.rows || !data.rows.length) return
+        el.innerHTML = `
+          <table>
+            <thead><tr><th>日期</th><th class="num">期号</th><th class="num">slot</th><th class="num">金额</th><th>结果</th><th class="num">盈亏</th></tr></thead>
+            <tbody>${data.rows.map(r => `
+              <tr>
+                <td>${r.draw_date}</td>
+                <td class="num">${r.pre_draw_issue||''}</td>
+                <td class="num">#${r.slot_1based}</td>
+                <td class="num">${fmt(r.total_cost)}</td>
+                <td>${r.outcome_label==='hit'?'<span class="pos">命中</span>':'未中'}</td>
+                <td class="num ${cls(r.pnl)}">${signed(r.pnl)}</td>
+              </tr>`).join('')}</tbody>
+          </table>`
+      } catch(e) { console.error(e) }
     }
 
     loadAll()
