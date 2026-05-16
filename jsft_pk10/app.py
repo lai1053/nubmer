@@ -152,6 +152,9 @@ def _persist_bets(draw_date: str, tickets: list[dict[str, Any]]) -> None:
         execute(sql, tuple(params))
     except Exception:
         pass
+
+
+def ensure_bet_log_table() -> None:
     execute(
         f"""
         CREATE TABLE IF NOT EXISTS jsft_bet_log (
