@@ -1372,106 +1372,110 @@ async def api_shadow_settle() -> dict[str, Any]:
     return settle_latest_complete_day()
 
 
+@app.get("/api/jssc-daily-curve")
+async def api_jssc_daily_curve() -> dict[str, Any]:
+    try:
+        rows = query(
+            """
+            SELECT
+                DATE_FORMAT(draw_date, '%%Y-%%m-%%d') AS date,
+                COALESCE(total_real_pnl, 0) AS daily_pnl,
+                COALESCE(settled_bankroll, 0) AS bankroll
+            FROM pk10_daily_equity
+            WHERE draw_date >= '2026-04-01'
+            ORDER BY draw_date
+            """
+        )
+    except Exception:
+        return {"rows": [], "start_bankroll": 1000.0, "status": "unavailable"}
+    running = 1000.0
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        running += float(row["daily_pnl"] or 0)
+        out.append(
+            {
+                "date": str(row["date"]),
+                "daily_pnl": round(float(row["daily_pnl"] or 0), 2),
+                "bankroll": round(float(row["bankroll"] or running), 2),
+            }
+        )
+    return {"rows": out, "start_bankroll": 1000.0}
+
+
 HTML = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>JSFT 1000积分推演</title>
+  <title>PK10 综合推演</title>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
   <style>
     :root {
-      color-scheme: light;
-      --bg: #ece7db;
-      --paper: #fffdf6;
-      --ink: #191916;
-      --muted: #6c675d;
-      --line: #ded6c7;
-      --field: #f3eddf;
-      --ok: #146a4d;
-      --warn: #a6620b;
-      --bad: #a42b25;
-      --accent: #0d5e70;
+      --bg: #f6efe3; --paper: rgba(255,250,241,0.78); --ink: #1f1611;
+      --muted: rgba(31,22,17,0.62); --line: rgba(31,22,17,0.12);
+      --accent: #cf4f24; --accent-soft: rgba(207,79,36,0.14);
+      --success: #147357; --danger: #a62822;
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0;
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--ink);
-      font-family: ui-sans-serif, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      margin: 0; min-height: 100vh; color: var(--ink);
+      background: radial-gradient(circle at 0% 0%, rgba(207,79,36,0.08), transparent 32%),
+                  radial-gradient(circle at 100% 100%, rgba(20,115,87,0.08), transparent 28%),
+                  linear-gradient(180deg, #f9f4eb 0%, #f2e6d2 100%);
+      font-family: 'Noto Sans SC', sans-serif;
     }
-    .shell { max-width: 1360px; margin: 0 auto; padding: 28px; }
+    .shell { max-width: 1480px; margin: 0 auto; padding: 24px; }
     header {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 18px;
-      align-items: end;
-      padding-bottom: 18px;
-      border-bottom: 1px solid var(--line);
+      display: flex; justify-content: space-between; align-items: flex-end;
+      padding-bottom: 18px; border-bottom: 1px solid var(--line); margin-bottom: 20px;
     }
-    h1 { margin: 0; font-size: clamp(30px, 5vw, 64px); line-height: 0.95; letter-spacing: 0; }
-    .sub { margin-top: 10px; color: var(--muted); font-size: 14px; }
+    h1 { margin: 0; font-family: 'Bebas Neue', cursive; font-size: 52px; letter-spacing: 0.04em; line-height: 1; }
+    .sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
     .badge {
-      display: inline-flex;
-      align-items: center;
-      min-height: 32px;
-      padding: 6px 10px;
-      border: 1px solid var(--line);
-      background: var(--paper);
-      font-weight: 800;
-      font-size: 13px;
+      display: inline-flex; align-items: center; min-height: 32px;
+      padding: 6px 12px; border: 1px solid var(--line);
+      background: var(--paper); font-weight: 800; font-size: 13px;
     }
-    .badge.ok { color: var(--ok); }
-    .badge.warn { color: var(--warn); }
-    .badge.bad { color: var(--bad); }
-    .grid2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 18px;
-      margin-top: 18px;
-    }
+    .badge.ok { color: var(--success); }
+    .badge.warn { color: var(--accent); }
+    .badge.bad { color: var(--danger); }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
     section {
-      border: 1px solid var(--line);
-      background: var(--paper);
-      padding: 18px;
+      border: 1px solid var(--line); background: var(--paper); padding: 18px;
+      border-radius: 4px;
     }
-    h2 { margin: 0 0 14px; font-size: 18px; }
-    .cards {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-    }
-    .metric { background: var(--field); padding: 12px; min-height: 76px; }
-    .metric span { display: block; color: var(--muted); font-size: 12px; font-weight: 700; }
-    .metric strong { display: block; margin-top: 8px; font-size: 22px; }
-    .metric.good strong { color: var(--ok); }
-    .metric.bad strong { color: var(--bad); }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: left; }
-    th { color: var(--muted); font-size: 12px; }
+    h2 { margin: 0 0 14px; font-size: 18px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .metric { background: var(--bg); padding: 10px 12px; min-height: 60px; border-radius: 2px; }
+    .metric span { display: block; color: var(--muted); font-size: 11px; font-weight: 700; }
+    .metric strong { display: block; margin-top: 6px; font-size: 19px; }
+    .metric.good strong { color: var(--success); }
+    .metric.bad strong { color: var(--danger); }
+    .metric.warn strong { color: var(--accent); }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 7px 6px; border-bottom: 1px solid var(--line); text-align: left; }
+    th { color: var(--muted); font-size: 11px; position: sticky; top: 0; background: var(--paper); }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
-    .pos { color: var(--ok); font-weight: 800; }
-    .neg { color: var(--bad); font-weight: 800; }
-    .table-wrap { overflow: auto; max-height: 520px; }
-    .curve { display: grid; gap: 8px; }
-    .bar-row { display: grid; grid-template-columns: 88px 1fr 78px; gap: 10px; align-items: center; font-size: 12px; }
-    .bar-track { height: 16px; background: var(--field); border: 1px solid var(--line); position: relative; overflow: hidden; }
-    .bar { position: absolute; top: 0; bottom: 0; left: 50%; background: var(--ok); }
-    .bar.neg { left: auto; right: 50%; background: var(--bad); }
-    .shadow-info {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-      margin-bottom: 14px;
-      font-size: 12px;
+    .pos { color: var(--success); font-weight: 700; }
+    .neg { color: var(--danger); font-weight: 700; }
+    .table-wrap { overflow: auto; max-height: 420px; }
+    .curve-shell { margin-top: 12px; }
+    svg.curve { width: 100%; height: 200px; }
+    .curve-legend { display: flex; gap: 16px; font-size: 12px; margin-bottom: 6px; }
+    .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; }
+    .status-bar { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 18px; }
+    .status-chip {
+      border: 1px solid var(--line); background: var(--paper); padding: 8px 10px;
+      font-size: 12px; border-radius: 2px;
     }
-    .shadow-info .metric { min-height: 52px; }
-    .shadow-info .metric strong { font-size: 16px; }
-    .error { border-color: rgba(161,44,35,.36); background: #fff5f1; color: var(--bad); }
-    @media (max-width: 900px) {
-      .grid2, header { grid-template-columns: 1fr; }
+    .status-chip b { display: block; font-size: 16px; margin-top: 2px; }
+    .full-width { grid-column: 1/-1; }
+    @media (max-width: 960px) {
+      .grid2 { grid-template-columns: 1fr; }
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .shell { padding: 16px; }
+      .status-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .shell { padding: 12px; }
+      h1 { font-size: 32px; }
     }
   </style>
 </head>
@@ -1479,239 +1483,209 @@ HTML = r"""<!doctype html>
   <main class="shell">
     <header>
       <div>
-        <h1>JSFT 1000积分推演</h1>
-        <div class="sub" id="subtitle">loading...</div>
+        <h1>PK10 综合推演</h1>
+        <div class="sub" id="subtitle">JSFT Shadow + JSSC Live · 日级对比</div>
       </div>
-      <div id="status" class="badge warn">loading</div>
+      <div id="status" class="badge warn">加载中</div>
     </header>
-    <section style="margin-top:18px" id="shadowInfoSection">
-      <h2>Frozen Window</h2>
-      <div class="shadow-info" id="shadowInfo"></div>
-    </section>
-    <section style="margin-top:18px">
-      <h2>账户总览</h2>
-      <div class="cards" id="accountCards"></div>
-    </section>
+
+    <div class="status-bar" id="statusBar"></div>
+
     <div class="grid2">
       <section>
-        <h2>今日 / 下一日计划</h2>
-        <div class="cards" id="planCards"></div>
+        <h2>JSFT 影子推演 <span style="font-weight:400;font-size:13px;color:var(--muted)">sum12_cap15 · g13_26_pos · daily85</span></h2>
+        <div class="cards" id="jsftCards"></div>
+        <div class="table-wrap" id="jsftTable" style="margin-top:14px"></div>
       </section>
       <section>
-        <h2>资金曲线</h2>
-        <div id="curve" class="curve"></div>
+        <h2>JSSC 实盘 <span style="font-weight:400;font-size:13px;color:var(--muted)">face+sum+exact · 日级结算</span></h2>
+        <div class="cards" id="jsscCards"></div>
+        <div class="table-wrap" id="jsscTable" style="margin-top:14px"></div>
       </section>
     </div>
-     <section style="margin-top:18px">
-       <h2>今日 slot 执行表</h2>
-       <div id="slots"></div>
-     </section>
-    <section style="margin-top:18px">
-      <h2>每天真实情况</h2>
-      <div id="daily" class="table-wrap"></div>
-    </section>
-    <div class="grid2">
-      <section>
-        <h2>最近数据日</h2>
-        <div id="days"></div>
-      </section>
-      <section>
-        <h2>最近票明细</h2>
-        <div id="tickets" class="table-wrap"></div>
-      </section>
-    </div>
-    <section style="margin-top:18px">
-      <h2>Live Shadow Status</h2>
-      <div id="shadowStatus"></div>
+
+    <section style="margin-top:18px" class="full-width">
+      <h2>资金曲线对比</h2>
+      <div class="curve-legend">
+        <span><span class="legend-dot" style="background:var(--accent)"></span>JSFT</span>
+        <span><span class="legend-dot" style="background:var(--ink)"></span>JSSC</span>
+      </div>
+      <div id="curve"></div>
     </section>
   </main>
+
   <script>
-    const statusEl = document.querySelector('#status')
-    const subtitleEl = document.querySelector('#subtitle')
-    const accountCardsEl = document.querySelector('#accountCards')
-    const planCardsEl = document.querySelector('#planCards')
-    const curveEl = document.querySelector('#curve')
-    const slotsEl = document.querySelector('#slots')
-    const dailyEl = document.querySelector('#daily')
-    const daysEl = document.querySelector('#days')
-    const ticketsEl = document.querySelector('#tickets')
-    const shadowInfoEl = document.querySelector('#shadowInfo')
-    const shadowStatusEl = document.querySelector('#shadowStatus')
-    const fmt = (value) => Number(value ?? 0).toFixed(2)
-    const signed = (value) => {
-      const n = Number(value ?? 0)
-      return `${n >= 0 ? '+' : ''}${n.toFixed(2)}`
-    }
-    const cls = (value) => Number(value ?? 0) >= 0 ? 'pos' : 'neg'
-    const metric = (label, value, tone = '') => `<div class="metric ${tone}"><span>${label}</span><strong>${value ?? '—'}</strong></div>`
-    function badgeClass(state) {
-      if (state?.status === 'ok') return 'ok'
-      if (state?.table_exists === false) return 'bad'
-      return 'warn'
-    }
-    function render(state) {
-      statusEl.className = `badge ${badgeClass(state)}`
-      statusEl.textContent = state.status === 'ok' ? 'DATA READY' : (state.status || 'NOT READY')
-      subtitleEl.textContent = state.frozen_window_id
-        ? `${state.frozen_window_id} | ${state.deployment_level || ''} | gate: ${state.gate_id || ''} | champion: ${state.champion_ready ? 'YES' : 'NO'}`
-        : 'core: 冠亚和 sum=12 / cap15基础曝光 / 日级gate开窗才下 / daily85真实账'
+    const statusEl = document.getElementById('status')
+    const subtitleEl = document.getElementById('subtitle')
+    const statusBarEl = document.getElementById('statusBar')
+    const jsftCardsEl = document.getElementById('jsftCards')
+    const jsftTableEl = document.getElementById('jsftTable')
+    const jsscCardsEl = document.getElementById('jsscCards')
+    const jsscTableEl = document.getElementById('jsscTable')
+    const curveEl = document.getElementById('curve')
 
-      if (state.frozen_window_id) {
-        shadowInfoEl.innerHTML = [
-          metric('frozen_window_id', state.frozen_window_id),
-          metric('base_window_id', state.base_window_id),
-          metric('gate_id', state.gate_id),
-          metric('deployment_level', state.deployment_level),
-          metric('champion_ready', state.champion_ready ? 'YES' : 'NO'),
-          metric('core_shadow_ready', state.core_shadow_ready ? 'YES' : 'NO'),
-          metric('settlement', 'daily_85'),
-          metric('latest_complete_date', state.latest_complete_date || '—'),
+    const fmt = v => Number(v ?? 0).toFixed(2)
+    const signed = v => { const n = Number(v ?? 0); return (n >= 0 ? '+' : '') + n.toFixed(2) }
+    const cls = v => Number(v ?? 0) >= 0 ? 'pos' : 'neg'
+    const card = (label, value, tone) => `<div class="metric ${tone||''}"><span>${label}</span><strong>${value ?? '—'}</strong></div>`
+
+    function renderCombined(jsft, jssc) {
+      const jsftOk = jsft && jsft.status === 'ok'
+      const jsscOk = jssc && jssc.rows && jssc.rows.length > 0
+
+      if (jsftOk || jsscOk) {
+        statusEl.className = 'badge ok'
+        statusEl.textContent = '就绪'
+        subtitleEl.textContent = 'JSFT Shadow + JSSC Live · 日级对比'
+      } else {
+        statusEl.className = 'badge warn'
+        statusEl.textContent = '等待数据'
+      }
+
+      // Status bar
+      const tgt = jsftOk ? (jsft.target || {}) : {}
+      const gate = jsftOk ? (jsft.core_window?.gate_state || {}) : {}
+      const ss = jsftOk ? (jsft.live_shadow_status || {}) : {}
+      statusBarEl.innerHTML = [
+        `<div class="status-chip"><span>JSFT 窗口</span><b>${gate.active ? '开窗' : '空仓'}</b></div>`,
+        `<div class="status-chip"><span>Gate 前13日</span><b>${signed(gate.prior13_real||0)}</b></div>`,
+        `<div class="status-chip"><span>最新完整日</span><b>${jsftOk ? (jsft.latest_complete_date||'—') : '—'}</b></div>`,
+        `<div class="status-chip"><span>Shadow 累计日</span><b>${ss.live_shadow_days||0}</b></div>`,
+        `<div class="status-chip"><span>Shadow 13日盈</span><b>${signed(ss.live13_real||0)}</b></div>`,
+        `<div class="status-chip"><span>部署级别</span><b>${jsftOk ? jsft.deployment_level : '—'}</b></div>`,
+      ].join('')
+
+      // JSFT cards
+      if (jsftOk) {
+        const totals = (jsft.account || {}).totals || {}
+        const untotals = ((jsft.account || {}).unconstrained_shadow_result || {}).totals || {}
+        const dq = jsft.data_quality_summary || {}
+        jsftCardsEl.innerHTML = [
+          card('起始积分', fmt(totals.bankroll_start)),
+          card('当前积分', fmt(totals.bankroll_current), Number(totals.total_real) >= 0 ? 'good' : 'bad'),
+          card('累计盈亏', signed(totals.total_real), Number(totals.total_real) >= 0 ? 'good' : 'bad'),
+          card('最大回撤', fmt(totals.max_drawdown), 'bad'),
+          card('总下注', totals.total_bets),
+          card('命中率', ((totals.hit_rate||0)*100).toFixed(1)+'%'),
+          card('异常日数', dq.anomaly_date_count||0, (dq.anomaly_date_count||0) > 0 ? 'warn' : ''),
+          card('bankroll 限制', totals.skipped_bets_due_to_bankroll||0, (totals.skipped_bets_due_to_bankroll||0) > 0 ? 'warn' : ''),
         ].join('')
+
+        const daily = (jsft.account || {}).daily || []
+        jsftTableEl.innerHTML = `
+          <table>
+            <thead><tr><th>日期</th><th>窗</th><th class="num">下注</th><th class="num">命中</th><th class="num">账面</th><th class="num">真实</th><th class="num">日末</th></tr></thead>
+            <tbody>${daily.slice().reverse().map(r => `
+              <tr>
+                <td>${r.date}</td><td>${r.window_active?'开':'空'}</td>
+                <td class="num">${r.bets}</td><td class="num">${r.hits}</td>
+                <td class="num ${cls(r.ledger)}">${signed(r.ledger)}</td>
+                <td class="num ${cls(r.real)}">${signed(r.real)}</td>
+                <td class="num">${fmt(r.bankroll_end)}</td>
+              </tr>`).join('')}</tbody>
+          </table>`
+      } else {
+        jsftCardsEl.innerHTML = '<div class="metric full-width"><span>JSFT</span><strong>数据未就绪</strong></div>'
+        jsftTableEl.innerHTML = ''
       }
 
-      const shadowStatus = state.live_shadow_status || {}
-      shadowStatusEl.innerHTML = shadowStatus.live_shadow_days
-        ? `<div class="cards" style="margin-bottom:14px">
-          ${metric('live_shadow_days', shadowStatus.live_shadow_days)}
-          ${metric('latest_settled_date', shadowStatus.latest_settled_date || '—')}
-          ${metric('live13_real', signed(shadowStatus.live13_real), Number(shadowStatus.live13_real) >= 0 ? 'good' : 'bad')}
-          ${metric('live13_ledger', signed(shadowStatus.live13_ledger), Number(shadowStatus.live13_ledger) >= 0 ? 'good' : 'bad')}
-          ${metric('live13_bonus', signed(shadowStatus.live13_bonus))}
-          ${metric('live13_positive_days', shadowStatus.live13_positive_days)}
-          ${metric('live13_max_drawdown', fmt(shadowStatus.live13_max_drawdown), 'bad')}
-          ${metric('core_shadow_pass_candidate', shadowStatus.core_shadow_pass_candidate ? 'YES' : 'NO', shadowStatus.core_shadow_pass_candidate ? 'good' : 'bad')}
+      // JSSC cards
+      if (jsscOk) {
+        const rows = jssc.rows || []
+        const totalPnl = rows.reduce((s, r) => s + (Number(r.daily_pnl)||0), 0)
+        const lastRow = rows[rows.length - 1] || {}
+        const pnlValues = rows.map(r => Number(r.daily_pnl)||0)
+        let peak = 0, maxDd = 0, running = 0
+        for (const v of pnlValues) { running += v; peak = Math.max(peak, running); maxDd = Math.min(maxDd, running - peak) }
+        const upDays = pnlValues.filter(v => v > 0).length
+        const totalBets = rows.length
+        jsscCardsEl.innerHTML = [
+          card('起始积分', '1000.00'),
+          card('当前积分', fmt((lastRow.bankroll||1000)), totalPnl >= 0 ? 'good' : 'bad'),
+          card('累计盈亏', signed(totalPnl), totalPnl >= 0 ? 'good' : 'bad'),
+          card('最大回撤', fmt(Math.abs(maxDd)), 'bad'),
+          card('记录天数', totalBets),
+          card('盈利天数', upDays+'/'+totalBets),
+          card('日均盈亏', signed(totalPnl / Math.max(totalBets, 1))),
+          card('结算方式', '实盘日结'),
+        ].join('')
+
+        jsscTableEl.innerHTML = `
+          <table>
+            <thead><tr><th>日期</th><th class="num">日盈亏</th><th class="num">日末积分</th></tr></thead>
+            <tbody>${rows.slice().reverse().slice(0, 60).map(r => `
+              <tr>
+                <td>${r.date}</td>
+                <td class="num ${cls(r.daily_pnl)}">${signed(r.daily_pnl)}</td>
+                <td class="num">${fmt(r.bankroll)}</td>
+              </tr>`).join('')}</tbody>
+          </table>`
+      } else {
+        jsscCardsEl.innerHTML = '<div class="metric full-width"><span>JSSC</span><strong>数据未就绪</strong></div>'
+        jsscTableEl.innerHTML = ''
+      }
+
+      // Combined curve
+      if (jsftOk || jsscOk) {
+        const jsftDaily = jsftOk ? ((jsft.account || {}).daily || []) : []
+        const jsscRows = jsscOk ? (jssc.rows || []) : []
+        const allDates = new Set()
+        jsftDaily.forEach(r => allDates.add(r.date))
+        jsscRows.forEach(r => allDates.add(r.date))
+        const sorted = [...allDates].sort().slice(-60)
+        const jsftMap = {}; jsftDaily.forEach(r => { jsftMap[r.date] = Number(r.bankroll_end) || 0 })
+        const jsscMap = {}; jsscRows.forEach(r => { jsscMap[r.date] = Number(r.bankroll) || 0 })
+
+        const vals1 = sorted.map(d => jsftMap[d] || null)
+        const vals2 = sorted.map(d => jsscMap[d] || null)
+        const allVals = [...vals1, ...vals2].filter(v => v != null)
+        const minV = Math.min(...allVals, 900), maxV = Math.max(...allVals, 1100)
+        const span = Math.max(1, maxV - minV)
+        const W = 920, H = 200, P = 30
+
+        const x = i => P + (W - 2*P) * i / Math.max(1, sorted.length - 1)
+        const y = v => H - P - (H - 2*P) * (v - minV) / span
+
+        const path1 = sorted.map((d, i) => {
+          const v = vals1[i]; if (v == null) return ''
+          return `${i===0 || vals1[i-1]==null ? 'M' : 'L'} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`
+        }).filter(s => s).join(' ')
+        const path2 = sorted.map((d, i) => {
+          const v = vals2[i]; if (v == null) return ''
+          return `${i===0 || vals2[i-1]==null ? 'M' : 'L'} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`
+        }).filter(s => s).join(' ')
+
+        const yTicks = [minV, minV + span*0.25, minV + span*0.5, minV + span*0.75, maxV]
+        curveEl.innerHTML = `
+          <svg viewBox="0 0 ${W} ${H}" class="curve">
+            <rect x="0" y="0" width="${W}" height="${H}" fill="var(--paper)" rx="8" />
+            ${yTicks.map(v => `<line x1="${P}" x2="${W-P}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--line)" stroke-dasharray="4 4" />`).join('')}
+            ${yTicks.map(v => `<text x="${P-4}" y="${y(v).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--muted)" dominant-baseline="middle">${fmt(v)}</text>`).join('')}
+            ${path1 ? `<path d="${path1}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" />` : ''}
+            ${path2 ? `<path d="${path2}" fill="none" stroke="var(--ink)" stroke-width="2.5" stroke-linecap="round" />` : ''}
+          </svg>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);padding:4px 30px">
+            <span>${sorted[0]||''}</span><span>${sorted[Math.floor(sorted.length/2)]||''}</span><span>${sorted[sorted.length-1]||''}</span>
           </div>`
-        : `<div class="metric" style="grid-column:1/-1"><span>Live Shadow</span><strong>No shadow data yet</strong></div>`
+      }
+    }
 
-      if (state.status !== 'ok') {
-        accountCardsEl.innerHTML = `<div class="metric error" style="grid-column:1/-1"><span>数据源</span><strong>${state.message || 'JSFT 数据未就绪'}</strong></div>`
-        planCardsEl.innerHTML = ''
-        curveEl.innerHTML = ''
-        slotsEl.innerHTML = ''
-        dailyEl.innerHTML = ''
-        daysEl.innerHTML = ''
-        ticketsEl.innerHTML = ''
-        return
-      }
-      const target = state.target || {}
-      const core = state.core_window || {}
-      const account = state.account || {}
-      const totals = account.totals || {}
-      const daily = account.daily || []
-      const unconstrained = account.unconstrained_shadow_result || {}
-      const unTotals = unconstrained.totals || {}
-      accountCardsEl.innerHTML = [
-        metric('起始积分', fmt(totals.bankroll_start)),
-        metric('当前积分', fmt(totals.bankroll_current), Number(totals.total_real) >= 0 ? 'good' : 'bad'),
-        metric('累计真实盈亏', signed(totals.total_real), Number(totals.total_real) >= 0 ? 'good' : 'bad'),
-        metric('最大回撤', fmt(totals.max_drawdown), 'bad'),
-        metric('bankroll_constrained', totals.bankroll_constrained ? 'YES' : 'NO', totals.skipped_bets_due_to_bankroll > 0 ? 'warn' : ''),
-        metric('skipped_bets_due_to_bankroll', totals.skipped_bets_due_to_bankroll || 0),
-        metric('unconstrained_bankroll', fmt(unTotals.bankroll_current || 0)),
-        metric('记录天数', totals.day_count),
-        metric('开窗天数', `${totals.active_days}/${totals.day_count}`),
-        metric('总下注', totals.total_bets),
-        metric('命中率', `${((totals.hit_rate || 0) * 100).toFixed(2)}%`),
-        metric('anomaly_dates', totals.anomaly_dates_count || 0, totals.anomaly_dates_count > 0 ? 'warn' : ''),
-      ].join('')
-      const gate = core.gate_state || {}
-      planCardsEl.innerHTML = [
-        metric('计划日期', target.date),
-        metric('状态', target.actionable ? '可记录' : '数据过期'),
-        metric('窗口', gate.active ? '开窗' : '空仓'),
-        metric('今日下注数', core.would_execute_bets_count),
-        metric('最新完整日', state.latest_complete_date),
-        metric('日级gate', core.daily_gate),
-        metric('前13日real', signed(gate.prior13_real || 0), Number(gate.prior13_real || 0) >= 0 ? 'good' : 'bad'),
-        metric('前26日real', signed(gate.prior26_real || 0), Number(gate.prior26_real || 0) >= 0 ? 'good' : 'bad')
-      ].join('')
-      const statusLabel = {
-        pending: '待开出', missed: '已开出', planned: '计划中',
-        stale_missed: '已过期', stale_unavailable: '不可用'
-      }
-      const decisionSlots = core.decision_slots || []
-      slotsEl.innerHTML = decisionSlots.length ? `
-        <div class="table-wrap" style="max-height:none">
-        <table>
-          <thead><tr><th class="num">期位 #</th><th class="num">预期期号</th><th>选择</th><th>状态</th></tr></thead>
-          <tbody>${decisionSlots.map(slot => {
-            const tone = slot.status === 'pending' ? 'pos' : (slot.status === 'missed' ? '' : '')
-            return `
-            <tr>
-              <td class="num"><b>${slot.slot}</b></td>
-              <td class="num">${slot.expected_issue || '—'}</td>
-              <td>冠亚和 ${slot.sum_value}</td>
-              <td class="${tone}">${statusLabel[slot.status] || slot.status}</td>
-            </tr>`
-          }).join('')}</tbody>
-        </table></div>
-        <div style="margin-top:8px;font-size:13px;color:var(--muted)">
-          今日共 <b>${decisionSlots.length}</b> 个 slot，gate 开窗时全部执行推演。
-          <b>${decisionSlots.filter(s => s.status==='missed').length}</b> 个已开出（等今日收盘后 replay 结算）、
-          <b style="color:var(--ok)">${decisionSlots.filter(s => s.status==='pending').length}</b> 个待开出。
-          ${decisionSlots.filter(s => s.status==='planned').length ? ' · <b>' + decisionSlots.filter(s => s.status==='planned').length + '</b> 个计划中（未来日）。' : ''}
-        </div>
-      ` : `<div class="metric" style="grid-column:1/-1"><span>今日窗口</span><strong>不开窗 / 空仓</strong><small>${gate.reason || ''}</small></div>`
-      dailyEl.innerHTML = `
-        <table>
-          <thead><tr><th>日期</th><th>窗口</th><th class="num">下注</th><th class="num">命中</th><th class="num">账面</th><th class="num">真实</th><th class="num">结算差</th><th class="num">日末积分</th><th class="num">bankroll skip</th></tr></thead>
-          <tbody>${daily.slice().reverse().map(row => `
-            <tr>
-              <td>${row.date}</td>
-              <td>${row.window_active ? '开' : '空'}</td>
-              <td class="num">${row.bets}</td>
-              <td class="num">${row.hits}</td>
-              <td class="num ${cls(row.ledger)}">${signed(row.ledger)}</td>
-              <td class="num ${cls(row.real)}">${signed(row.real)}</td>
-              <td class="num">${signed(row.bonus)}</td>
-              <td class="num">${fmt(row.bankroll_end)}</td>
-              <td class="num">${row.skipped_bets_due_to_bankroll || 0}</td>
-            </tr>`).join('')}</tbody>
-        </table>`
-      const last = daily.slice(-18)
-      const maxAbs = Math.max(1, ...last.map(row => Math.abs(Number(row.real || 0))))
-      curveEl.innerHTML = last.map(row => {
-        const real = Number(row.real || 0)
-        const width = Math.max(2, Math.abs(real) / maxAbs * 50)
-        return `<div class="bar-row"><span>${row.date.slice(5)}</span><div class="bar-track"><div class="bar ${real < 0 ? 'neg' : ''}" style="width:${width}%"></div></div><span class="${cls(real)}">${signed(real)}</span></div>`
-      }).join('')
-      daysEl.innerHTML = `
-        <table>
-          <thead><tr><th>date</th><th>count</th><th>full</th><th>range</th></tr></thead>
-          <tbody>${(state.recent_days || []).map(day => `
-            <tr>
-              <td>${day.draw_date}</td>
-              <td>${day.issue_count}</td>
-              <td>${day.is_full_day ? 'yes' : 'no'}</td>
-              <td>${day.min_issue || ''} - ${day.max_issue || ''}</td>
-            </tr>`).join('')}</tbody>
-        </table>`
-      ticketsEl.innerHTML = `
-        <table>
-          <thead><tr><th>时间</th><th>slot</th><th>期号</th><th>结果</th><th class="num">盈亏</th></tr></thead>
-          <tbody>${(account.tickets || []).slice().reverse().slice(0, 60).map(row => `
-            <tr>
-              <td>${row.pre_draw_time}</td>
-              <td>#${row.slot_1based}</td>
-              <td>${row.pre_draw_issue}</td>
-              <td>${row.sum_fs}${row.hit ? ' 命中' : ''}</td>
-              <td class="num ${cls(row.ledger)}">${signed(row.ledger)}</td>
-            </tr>`).join('')}</tbody>
-        </table>`
-    }
-    async function load() {
+    async function loadAll() {
       try {
-        const response = await fetch('/api/state', { cache: 'no-store' })
-        const state = await response.json()
-        render(state)
-      } catch (error) {
+        const [jsftRes, jsscRes] = await Promise.all([
+          fetch('/api/state', { cache: 'no-store' }).then(r => r.json()),
+          fetch('/api/jssc-daily-curve', { cache: 'no-store' }).then(r => r.json())
+        ])
+        renderCombined(jsftRes, jsscRes)
+      } catch (e) {
         statusEl.className = 'badge bad'
-        statusEl.textContent = 'ERROR'
-        accountCardsEl.innerHTML = `<div class="metric error" style="grid-column:1/-1"><span>错误</span><strong>${String(error)}</strong></div>`
+        statusEl.textContent = '错误'
+        console.error(e)
       }
     }
-    load()
-    setInterval(load, 30000)
+
+    loadAll()
+    setInterval(loadAll, 60000)
   </script>
 </body>
 </html>
