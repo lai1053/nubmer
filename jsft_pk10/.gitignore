@@ -1,0 +1,17 @@
+# Runtime state and secrets
+.env
+.env.bak*
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated runtime data
+data/*.log
+data/*last.json
+data/live_shadow_log.csv
+
+# Local OS files
+.DS_Store
