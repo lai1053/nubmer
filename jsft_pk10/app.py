@@ -1084,6 +1084,7 @@ def latest_summary() -> dict[str, Any]:
     slots = build_decision_slots(
         target, latest_seen, expected_count, gate_state
     )
+    _enrich_slots_with_results(slots, latest_seen, expected_count)
     shadow_stat = shadow_status()
     dq = get_data_quality_summary(pre_fetched_counts=list(counts_desc))
 
@@ -1201,6 +1202,31 @@ def target_day(
         "latest_seen_date": latest_seen_date,
         "latest_seen_count": latest_seen_count,
     }
+
+
+def _enrich_slots_with_results(
+    slots: list[dict[str, Any]],
+    latest_seen: dict[str, Any],
+    expected_count: int,
+) -> None:
+    drawn = [s for s in slots if s.get("expected_issue") and s["status"] == "missed"]
+    if not drawn:
+        return
+    try:
+        issues = [str(s["expected_issue"]) for s in drawn]
+        placeholders = ",".join(["%s"] * len(issues))
+        rows = query(
+            f"SELECT pre_draw_issue, sum_fs FROM {DB_TABLE} WHERE pre_draw_issue IN ({placeholders})",
+            tuple(issues),
+        )
+        result_map = {str(r["pre_draw_issue"]): int(r["sum_fs"] or 0) for r in rows}
+        for s in drawn:
+            iss = str(s["expected_issue"])
+            if iss in result_map:
+                s["sum_fs"] = result_map[iss]
+                s["hit"] = result_map[iss] == CORE_SUM_VALUE
+    except Exception:
+        pass
 
 
 def build_decision_slots(
@@ -1711,6 +1737,7 @@ HTML = r"""<!doctype html>
         <h2>JSFT 影子推演 <span style="font-weight:400;font-size:13px;color:var(--muted)">sum12_cap15 · g13_26_pos · daily85</span></h2>
         <div class="cards" id="jsftCards"></div>
         <div class="table-wrap" id="jsftTable" style="margin-top:14px"></div>
+        <div id="jsftSlots" style="margin-top:10px"></div>
         <details style="margin-top:12px">
           <summary style="cursor:pointer;font-size:13px;color:var(--muted)">投注明细日志（已落库 jsft_bet_log）</summary>
           <div class="table-wrap" id="jsftBetLog" style="margin-top:8px;max-height:300px"></div>
@@ -1829,6 +1856,26 @@ HTML = r"""<!doctype html>
               </tr>` : ''}
             `).join('')}</tbody>
           </table>`
+        // Today's slots
+        const slotsEl = document.getElementById('jsftSlots')
+        const decisionSlots = jsft.next_decision?.slots || jsft.core_window?.decision_slots || []
+        if (decisionSlots.length > 0) {
+          const slotLabel = s => s.status === 'missed' ? '已开出' : s.status === 'pending' ? '待开出' : s.status
+          slotsEl.innerHTML = `
+            <div style="font-size:12px;color:var(--muted);margin-bottom:6px">今日 slot（${decisionSlots.length}个，gate开窗全部执行）</div>
+            ${decisionSlots.map(s => {
+              const hasResult = s.sum_fs != null
+              const hit = s.hit
+              return `<span style="display:inline-block;margin:2px 8px 2px 0;white-space:nowrap;font-size:12px">
+                #${s.slot} <span class="num">期${s.expected_issue||'—'}</span> 押和${s.sum_value}
+                ${hasResult ? (hit ? '<span class="pos">开'+s.sum_fs+' ✓</span>' : '<span class="neg">开'+s.sum_fs+' ✗</span>') : '<span style="color:var(--muted)">'+slotLabel(s)+'</span>'}
+              </span>`
+            }).join('')}
+            ${decisionSlots.filter(s => s.sum_fs == null).length > 0 ? `<span style="font-size:11px;color:var(--muted)">（${decisionSlots.filter(s => s.sum_fs == null).length}个待开出）</span>` : ''}
+          `
+        } else {
+          slotsEl.innerHTML = ''
+        }
       } else {
         jsftCardsEl.innerHTML = '<div class="metric full-width"><span>JSFT</span><strong>数据未就绪</strong></div>'
         jsftTableEl.innerHTML = ''
