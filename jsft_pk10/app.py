@@ -1822,8 +1822,8 @@ HTML = r"""<!doctype html>
               <tr style="background:var(--bg)">
                 <td colspan="8" style="padding:4px 8px;font-size:11px">
                   ${r.tickets.map(t => `<span style="display:inline-block;margin:2px 6px 2px 0;white-space:nowrap">
-                    #${t.slot_1based} <span class="num">期${t.pre_draw_issue}</span>
-                    ${t.hit ? '<span class="pos">✓命中</span>' : '<span class="neg">✗</span>'}
+                    #${t.slot_1based} <span class="num">期${t.pre_draw_issue}</span> 押和${t.selection.slice(-2)}
+                    ${t.hit ? '<span class="pos">开'+t.sum_fs+' ✓</span>' : '<span class="neg">开'+t.sum_fs+' ✗</span>'}
                   </span>`).join('')}
                 </td>
               </tr>` : ''}
